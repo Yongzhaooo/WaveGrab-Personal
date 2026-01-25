@@ -55,6 +55,5 @@ rcedit.exe
 CLAUDE.md
 wasapi-recorder-spec.md
 
-# Duplicate files in root (originals in assets/)
+# Duplicate files in root
 /icon.ico
-/icon.png
