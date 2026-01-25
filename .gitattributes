@@ -1,0 +1,26 @@
+# Auto detect text files and normalize line endings
+* text=auto
+
+# Python files
+*.py text eol=lf
+
+# Shell scripts
+*.sh text eol=lf
+*.bat text eol=crlf
+
+# Config files
+*.json text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+
+# Binary files
+*.ico binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.exe binary
+*.dll binary

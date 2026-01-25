@@ -1,0 +1,60 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+
+# Virtual environment
+venv/
+env/
+.venv/
+
+# PyInstaller
+build/
+dist/
+*.spec.bak
+
+# Local config
+config.json
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Claude Code
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Binaries (download separately)
+bin/
+rcedit.exe
+
+# Recordings
+*.flac
+*.wav
+*.mp3
+
+# Logs
+*.log
+
+# Internal docs
+CLAUDE.md
+wasapi-recorder-spec.md
+
+# Duplicate files in root (originals in assets/)
+/icon.ico
+/icon.png

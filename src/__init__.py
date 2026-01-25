@@ -1,0 +1,1 @@
+"""WASAPI Audio Recorder package."""
