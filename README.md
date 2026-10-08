@@ -1,157 +1,42 @@
-# WaveGrab
+# WaveGrab Personal
 
-<p align="center">
-  <img src="icon.png" alt="WaveGrab Logo" width="128" height="128">
-</p>
+Windows 双路录音小工具。基于 [WaveGrab](https://github.com/francescoscalzo/WaveGrab)（MIT）修改。
 
-<p align="center">
-  <strong>Windows audio recorder that captures system audio and microphone simultaneously using WASAPI</strong>
-</p>
+## 使用
 
-<p align="center">
-  <a href="#features">Features</a> •
-  <a href="#why-wavegrab">Why WaveGrab</a> •
-  <a href="#installation">Installation</a> •
-  <a href="#usage">Usage</a> •
-  <a href="#build-from-source">Build</a>
-</p>
+运行 `dist/WaveGrab-Personal.exe`，或双击 `Start-WaveGrab.cmd`。
 
----
+1. 默认选择 Windows 当前的系统声音和麦克风，也可以手动换设备。
+2. 填录音主题，点击 **开始录音**；需要时暂停或切换 Mini 窗口。
+3. 点击 **停止保存**。
+4. 点击 **打开录音文件夹**，或 **复制交接说明**，粘贴给 Codex、agy 或其他工具。
 
-## Features
+默认保存在用户的 `Music/WaveGrab` 文件夹，可在界面中修改。
+每次录音单独建文件夹，包含：
 
-- **WASAPI Loopback** - Records system audio from any output device (speakers, USB headsets, Bluetooth)
-- **Microphone Mixing** - Combines mic input with system audio in real-time
-- **Universal Compatibility** - Works with USB, Bluetooth, and built-in audio devices (unlike Stereo Mix)
-- **Independent Volume Controls** - Separate sliders for system and microphone levels
-- **Real-time Visualization** - Waveform display and level meters during recording
-- **MP3 Export** - Automatic conversion to MP3 after recording
-- **Mini Mode** - Compact always-on-top window while recording
-- **Pause/Resume** - Pause recording without creating multiple files
-- **Persistent Settings** - Remembers your device selection and preferences
+- `mixed.flac`：合成的无损音频，优先用于转录。
+- `system.flac`、`mic.flac`：所选设备的独立音轨。
+- `HANDOFF.md`：通用转录和清洗要求。
+- `session.json`：设备、录制时长和完成状态。
 
-## Why WaveGrab?
+音轨按录制音量保存；独立来源不等同于说话人分离。暂停期间不保存声音。
+FLAC 无需 FFmpeg；应用不内置转录模型，也不会启动 AI 工具或上传录音。
+下游工具需要有读取音频或调用转录工具的能力。
 
-Windows doesn't natively support recording microphone and system audio together. Existing solutions have drawbacks:
+## 从源码运行或打包
 
-| Solution | Problem |
-|----------|---------|
-| **Stereo Mix** | Doesn't work with USB/Bluetooth devices |
-| **VoiceMeeter** | Complex virtual driver setup |
-| **OBS Studio** | Overkill for audio-only recording |
-| **Paid software** | Unnecessary cost for a simple task |
+Windows 10/11、Python 3.12 或更新版本：
 
-**WaveGrab** solves this with a lightweight, single-purpose app using Windows WASAPI loopback - no virtual drivers, no complex setup.
-
-## Installation
-
-### Option 1: Download Release
-
-Download the latest `WaveGrab.exe` from [Releases](../../releases).
-
-### Option 2: Run from Source
-
-```bash
-# Clone the repository
-git clone https://github.com/yourusername/wavegrab.git
-cd wavegrab
-
-# Create virtual environment
-python -m venv venv
-.\venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run
-python src/main_gui.py
+```powershell
+$env:PYTHONUTF8='1'
+$env:PYTHONIOENCODING='utf-8'
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+.\.venv\Scripts\python.exe src/main_gui.py
+.\.venv\Scripts\python.exe -m PyInstaller --noconfirm build.spec
 ```
 
-### FFmpeg (Required for MP3)
+离线小检查：`.\.venv\Scripts\python.exe selfcheck.py`。
+它用合成音频覆盖混音、独立音轨和 UTF-8 交接文件，不开启麦克风。
 
-For MP3 conversion, download [FFmpeg](https://ffmpeg.org/download.html) and place both `ffmpeg.exe` and `ffprobe.exe` in the `bin/` folder, or add them to your system PATH.
-
-## Usage
-
-1. **Select Loopback Device** - Choose which output device to record (what you hear)
-2. **Select Microphone** - Choose your mic input (optional)
-3. **Adjust Volumes** - Set levels for system and mic independently
-4. **Click REC** - Start recording
-5. **Click STOP** - Stop and save as MP3
-
-### Tips
-
-- Use **Test** button to check audio levels before recording
-- **Mini Mode** keeps a small window on top while you work
-- Recordings are saved with timestamp: `recording_2025-01-25_143022.mp3`
-- Config is saved automatically - your settings persist between sessions
-
-## Build from Source
-
-### Requirements
-
-- Python 3.12+
-- Windows 10/11 (64-bit)
-
-### Build Executable
-
-```bash
-# Activate virtual environment
-.\venv\Scripts\activate
-
-# Install PyInstaller
-pip install pyinstaller
-
-# Build
-.\build.bat
-```
-
-The executable will be created in `dist/WaveGrab.exe`.
-
-## Tech Stack
-
-- **Python 3.12**
-- **PyAudioWPatch** - WASAPI loopback support
-- **NumPy** - Audio processing and mixing
-- **soundfile** - WAV file I/O
-- **pydub** - MP3 conversion
-- **Tkinter** - GUI
-
-## Project Structure
-
-```
-wavegrab/
-├── src/
-│   ├── main_gui.py      # Entry point
-│   ├── devices.py       # WASAPI device enumeration
-│   ├── recorder.py      # Audio capture
-│   ├── mixer.py         # Stream mixing
-│   ├── config.py        # Settings persistence
-│   ├── mp3_converter.py # FLAC to MP3 conversion
-│   └── gui/
-│       ├── app.py       # Main window
-│       ├── controller.py# Recording logic
-│       └── widgets.py   # Custom UI components
-├── assets/              # Icons
-├── requirements.txt     # Python dependencies
-├── build.spec          # PyInstaller config
-└── build.bat           # Build script
-```
-
-## License
-
-MIT License - feel free to use, modify, and distribute.
-
-## Contributing
-
-Contributions are welcome! Feel free to:
-
-- Report bugs
-- Suggest features
-- Submit pull requests
-
----
-
-<p align="center">
-  Made with Python and WASAPI
-</p>
+许可证与原作者声明见 [LICENSE](LICENSE)。

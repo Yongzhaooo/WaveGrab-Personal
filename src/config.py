@@ -32,6 +32,7 @@ class AppConfig:
     # Output
     output_folder: str = ""
     last_filename: str = ""
+    last_session: str = ""
 
     # Window
     window_geometry: str = ""

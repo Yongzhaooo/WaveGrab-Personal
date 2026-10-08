@@ -18,7 +18,6 @@ a = Analysis(
         'pyaudiowpatch',
         'soundfile',
         'numpy',
-        'pydub',
         'tkinter',
         'tkinter.ttk',
         'tkinter.filedialog',
@@ -29,7 +28,7 @@ a = Analysis(
         'recorder',
         'writer',
         'config',
-        'mp3_converter',
+        'handoff',
         'gui',
         'gui.app',
         'gui.controller',
@@ -45,7 +44,7 @@ a = Analysis(
     noarchive=False,
 )
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
@@ -53,7 +52,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='WaveGrab',
+    name='WaveGrab-Personal',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

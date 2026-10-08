@@ -57,3 +57,6 @@ wasapi-recorder-spec.md
 
 # Duplicate files in root
 /icon.ico
+
+# Local recording handoff folders
+recordings/

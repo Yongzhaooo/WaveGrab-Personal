@@ -4,6 +4,9 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from pathlib import Path
 import threading
+import os
+import queue
+from handoff import clipboard_prompt
 
 import numpy as np
 
@@ -11,7 +14,7 @@ from paths import get_base_path, get_src_path
 import sys
 sys.path.insert(0, str(get_src_path()))
 
-from devices import AudioDevice, get_loopback_devices, get_input_devices
+from devices import AudioDevice, get_loopback_devices, get_input_devices, get_default_devices
 from config import AppConfig, load_config, save_config
 from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, ToastNotification, COLORS, apply_dark_theme
 from .controller import RecordingController, RecordingCallbacks, RecordingState
@@ -22,14 +25,16 @@ class AudioRecorderApp:
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("WaveGrab")
-        self.root.geometry("620x620")
+        self.root.title("WaveGrab · Personal")
+        self._ui_queue = queue.SimpleQueue()
+        self._closing = False
+        self.root.geometry("720x740")
 
         # Window icon
         icon_path = get_base_path() / "assets" / "icon_bmp.ico"
         if icon_path.exists():
             self.root.iconbitmap(str(icon_path))
-        self.root.minsize(550, 580)
+        self.root.minsize(650, 700)
         self.root.resizable(True, True)
 
         # Load configuration
@@ -58,9 +63,9 @@ class AudioRecorderApp:
         self.mic_var = tk.StringVar()
         self.loopback_vol_var = tk.DoubleVar(value=self.config.loopback_volume * 100)
         self.mic_vol_var = tk.DoubleVar(value=self.config.mic_volume * 100)
-        self.output_folder_var = tk.StringVar(value=self.config.output_folder or str(Path.cwd()))
+        self.output_folder_var = tk.StringVar(value=self.config.output_folder or str(Path.home() / 'Music' / 'WaveGrab'))
         self.filename_var = tk.StringVar(value=self.config.last_filename)
-        self.status_var = tk.StringVar(value="Ready")
+        self.status_var = tk.StringVar(value="就绪")
         self.time_var = tk.StringVar(value="00:00:00")
 
         # Mini mode state
@@ -71,7 +76,7 @@ class AudioRecorderApp:
         self._create_ui()
 
         # Overlay and toast
-        self._overlay = OverlayProgress(self.root, "Converting to MP3...")
+        self._overlay = OverlayProgress(self.root, "正在保存录音…")
         self._toast = ToastNotification(self.root)
 
         # Restore selections
@@ -82,6 +87,23 @@ class AudioRecorderApp:
 
         # Update preview periodically
         self._update_preview()
+        self._drain_ui()
+
+    def _post(self, callback):
+        self._ui_queue.put(callback)
+
+    def _drain_ui(self):
+        for _ in range(100):
+            try:
+                callback = self._ui_queue.get_nowait()
+            except queue.Empty:
+                break
+            callback()
+        try:
+            if self.root.winfo_exists():
+                self.root.after(40, self._drain_ui)
+        except tk.TclError:
+            pass
 
     def _create_ui(self) -> None:
         """Create user interface."""
@@ -90,12 +112,12 @@ class AudioRecorderApp:
         self._main_frame = main_frame
 
         # === Devices ===
-        devices_frame = ttk.LabelFrame(main_frame, text=" Devices ", padding=10)
+        devices_frame = ttk.LabelFrame(main_frame, text=" 录音来源 ", padding=10)
         devices_frame.pack(fill=tk.X, pady=(0, 10))
         self._devices_frame = devices_frame
 
         # Loopback
-        ttk.Label(devices_frame, text="Loopback:").grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Label(devices_frame, text="系统声音：").grid(row=0, column=0, sticky="w", pady=2)
         loopback_combo = ttk.Combobox(
             devices_frame,
             textvariable=self.loopback_var,
@@ -103,7 +125,7 @@ class AudioRecorderApp:
             width=50
         )
         # Show name with sample rate
-        self._loopback_display_names = ["(None)"] + [
+        self._loopback_display_names = ["(不录制)"] + [
             f"{d.name} [{d.sample_rate}Hz]" for d in self.loopback_devices
         ]
         loopback_combo["values"] = self._loopback_display_names
@@ -112,7 +134,7 @@ class AudioRecorderApp:
         loopback_combo.bind("<<ComboboxSelected>>", self._on_loopback_change)
 
         # Microphone
-        ttk.Label(devices_frame, text="Microphone:").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(devices_frame, text="麦克风：").grid(row=1, column=0, sticky="w", pady=2)
         mic_combo = ttk.Combobox(
             devices_frame,
             textvariable=self.mic_var,
@@ -120,7 +142,7 @@ class AudioRecorderApp:
             width=50
         )
         # Show name with sample rate
-        self._mic_display_names = ["(None)"] + [
+        self._mic_display_names = ["(不录制)"] + [
             f"{d.name} [{d.sample_rate}Hz]" for d in self.input_devices
         ]
         mic_combo["values"] = self._mic_display_names
@@ -131,7 +153,7 @@ class AudioRecorderApp:
         # Test button
         self.test_btn = ttk.Button(
             devices_frame,
-            text="Test",
+            text="试听",
             command=self._on_test,
             width=8
         )
@@ -140,12 +162,12 @@ class AudioRecorderApp:
         devices_frame.columnconfigure(1, weight=1)
 
         # === Volume ===
-        volume_frame = ttk.LabelFrame(main_frame, text=" Volume ", padding=10)
+        volume_frame = ttk.LabelFrame(main_frame, text=" 录制音量 ", padding=10)
         volume_frame.pack(fill=tk.X, pady=(0, 10))
         self._volume_frame = volume_frame
 
         # Loopback volume
-        ttk.Label(volume_frame, text="System:").grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Label(volume_frame, text="系统声音：").grid(row=0, column=0, sticky="w", pady=2)
         loopback_scale = ttk.Scale(
             volume_frame,
             from_=0, to=100,
@@ -160,7 +182,7 @@ class AudioRecorderApp:
         self.loopback_meter.grid(row=0, column=3, padx=5)
 
         # Mic volume
-        ttk.Label(volume_frame, text="Microphone:").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(volume_frame, text="麦克风：").grid(row=1, column=0, sticky="w", pady=2)
         mic_scale = ttk.Scale(
             volume_frame,
             from_=0, to=100,
@@ -181,7 +203,7 @@ class AudioRecorderApp:
         self._on_mic_vol_change(None)
 
         # === Waveform ===
-        waveform_frame = ttk.LabelFrame(main_frame, text=" Waveform ", padding=10)
+        waveform_frame = ttk.LabelFrame(main_frame, text=" 实时波形 ", padding=10)
         waveform_frame.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
         self._waveform_frame = waveform_frame
 
@@ -189,25 +211,25 @@ class AudioRecorderApp:
         self.waveform.pack(fill=tk.BOTH, expand=True)
 
         # === Output ===
-        output_frame = ttk.LabelFrame(main_frame, text=" Output ", padding=10)
+        output_frame = ttk.LabelFrame(main_frame, text=" 保存位置 ", padding=10)
         output_frame.pack(fill=tk.X, pady=(0, 10))
         self._output_frame = output_frame
 
         # Folder
-        ttk.Label(output_frame, text="Folder:").grid(row=0, column=0, sticky="w", pady=2)
+        ttk.Label(output_frame, text="文件夹：").grid(row=0, column=0, sticky="w", pady=2)
         folder_entry = ttk.Entry(output_frame, textvariable=self.output_folder_var)
         folder_entry.grid(row=0, column=1, sticky="ew", padx=5, pady=2)
-        browse_btn = ttk.Button(output_frame, text="Browse...", command=self._browse_folder)
+        browse_btn = ttk.Button(output_frame, text="选择…", command=self._browse_folder)
         browse_btn.grid(row=0, column=2, padx=5, pady=2)
 
         # Filename
-        ttk.Label(output_frame, text="Filename:").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Label(output_frame, text="录音主题：").grid(row=1, column=0, sticky="w", pady=2)
         filename_entry = ttk.Entry(output_frame, textvariable=self.filename_var)
         filename_entry.grid(row=1, column=1, columnspan=2, sticky="ew", padx=5, pady=2)
         self.filename_var.trace_add("write", lambda *_: self._update_preview())
 
         # Preview
-        ttk.Label(output_frame, text="Preview:").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Label(output_frame, text="预览：").grid(row=2, column=0, sticky="w", pady=2)
         self.preview_label = ttk.Label(output_frame, text="", foreground=COLORS["fg_dim"])
         self.preview_label.grid(row=2, column=1, columnspan=2, sticky="w", padx=5, pady=2)
 
@@ -225,7 +247,7 @@ class AudioRecorderApp:
 
         self.rec_btn = ttk.Button(
             btn_frame,
-            text="  REC",
+            text="  开始录音",
             command=self._on_rec,
             style="Accent.TButton",
             width=12
@@ -234,7 +256,7 @@ class AudioRecorderApp:
 
         self.pause_btn = ttk.Button(
             btn_frame,
-            text="  PAUSE",
+            text="  暂停",
             command=self._on_pause,
             width=12,
             state=tk.DISABLED
@@ -243,7 +265,7 @@ class AudioRecorderApp:
 
         self.stop_btn = ttk.Button(
             btn_frame,
-            text="  STOP",
+            text="  停止保存",
             command=self._on_stop,
             width=12,
             state=tk.DISABLED
@@ -268,12 +290,18 @@ class AudioRecorderApp:
         )
         self._timer_label.pack(pady=8)
 
+        handoff_frame = ttk.Frame(main_frame)
+        handoff_frame.pack(fill=tk.X, pady=(0, 10))
+        ttk.Button(handoff_frame, text="打开录音文件夹", command=self._open_recordings).pack(side=tk.LEFT, padx=5)
+        ttk.Button(handoff_frame, text="复制交接说明", command=self._copy_handoff).pack(side=tk.LEFT, padx=5)
+        ttk.Label(handoff_frame, text="录音 → 转录 → 清洗", foreground=COLORS["fg_dim"]).pack(side=tk.RIGHT)
+
         # === Status bar ===
         status_frame = ttk.Frame(main_frame)
         status_frame.pack(fill=tk.X)
         self._status_frame = status_frame
 
-        ttk.Label(status_frame, text="Status:").pack(side=tk.LEFT)
+        ttk.Label(status_frame, text="状态：").pack(side=tk.LEFT)
         status_label = ttk.Label(
             status_frame,
             textvariable=self.status_var,
@@ -295,6 +323,17 @@ class AudioRecorderApp:
                     self.loopback_var.set(self._loopback_display_names[i + 1])
                     self._on_loopback_change(None)
                     break
+
+        if not self.config.loopback_device and self.loopback_devices:
+            defaults = get_default_devices()
+            selected = next((i for i, d in enumerate(self.loopback_devices) if d.index == defaults[0]), 0)
+            self.loopback_var.set(self._loopback_display_names[selected + 1])
+            self._on_loopback_change(None)
+        if not self.config.mic_device and self.input_devices:
+            defaults = get_default_devices()
+            selected = next((i for i, d in enumerate(self.input_devices) if d.index == defaults[1]), 0)
+            self.mic_var.set(self._mic_display_names[selected + 1])
+            self._on_mic_change(None)
 
         # Microphone - search by name and sample rate
         if self.config.mic_device:
@@ -319,7 +358,7 @@ class AudioRecorderApp:
         """Open folder selection dialog."""
         folder = filedialog.askdirectory(
             initialdir=self.output_folder_var.get(),
-            title="Select output folder"
+            title="选择录音文件夹"
         )
         if folder:
             self.output_folder_var.set(folder)
@@ -328,22 +367,22 @@ class AudioRecorderApp:
     def _on_loopback_change(self, event) -> None:
         """Handle loopback device change."""
         display_name = self.loopback_var.get()
-        if display_name == "(None)":
+        if display_name == "(不录制)":
             self.controller.set_loopback_device(None)
         else:
             # Find device by index in list
-            idx = self._loopback_display_names.index(display_name) - 1  # -1 for "(None)"
+            idx = self._loopback_display_names.index(display_name) - 1  # -1 for "(不录制)"
             if 0 <= idx < len(self.loopback_devices):
                 self.controller.set_loopback_device(self.loopback_devices[idx])
 
     def _on_mic_change(self, event) -> None:
         """Handle microphone device change."""
         display_name = self.mic_var.get()
-        if display_name == "(None)":
+        if display_name == "(不录制)":
             self.controller.set_mic_device(None)
         else:
             # Find device by index in list
-            idx = self._mic_display_names.index(display_name) - 1  # -1 for "(None)"
+            idx = self._mic_display_names.index(display_name) - 1  # -1 for "(不录制)"
             if 0 <= idx < len(self.input_devices):
                 self.controller.set_mic_device(self.input_devices[idx])
 
@@ -431,24 +470,24 @@ class AudioRecorderApp:
 
         # Restore size
         self.root.resizable(True, True)
-        self.root.minsize(550, 580)
+        self.root.minsize(650, 700)
         if self._normal_geometry:
             self.root.geometry(self._normal_geometry)
         else:
-            self.root.geometry("620x620")
+            self.root.geometry("720x740")
 
     def _on_test(self) -> None:
         """Start/stop device test."""
         if self.controller.state == RecordingState.MONITORING:
             self.controller.stop_monitoring()
-            self.test_btn.configure(text="Test")
-            self.status_var.set("Ready")
+            self.test_btn.configure(text="试听")
+            self.status_var.set("就绪")
         else:
             if self.controller.start_monitoring():
-                self.test_btn.configure(text="Stop Test")
-                self.status_var.set("Testing - check audio levels")
+                self.test_btn.configure(text="停止试听")
+                self.status_var.set("正在试听，请看两路音量条")
             else:
-                messagebox.showwarning("Warning", "Select at least one device")
+                messagebox.showwarning("Warning", "请至少选择一个录音设备")
 
     def _on_rec(self) -> None:
         """Start recording."""
@@ -456,8 +495,8 @@ class AudioRecorderApp:
         self.controller.set_filename_prefix(self.filename_var.get())
 
         if self.controller.start_recording():
-            self.test_btn.configure(text="Test", state=tk.DISABLED)
-            self.status_var.set("Recording...")
+            self.test_btn.configure(text="试听", state=tk.DISABLED)
+            self.status_var.set("录音中…")
 
     def _on_pause(self) -> None:
         """Pause or resume recording."""
@@ -468,6 +507,10 @@ class AudioRecorderApp:
 
     def _on_stop(self) -> None:
         """Stop recording."""
+        if not self.controller.is_recording:
+            return
+        self.stop_btn.configure(state=tk.DISABLED)
+        self.pause_btn.configure(state=tk.DISABLED)
         # Show immediate visual feedback
         self.root.configure(cursor="wait")
         self._overlay.show()
@@ -476,24 +519,24 @@ class AudioRecorderApp:
         # Stop in background to not block UI
         def stop_async():
             self.controller.stop_recording()
-            self.root.after(0, lambda: self.root.configure(cursor=""))
+            self._post(lambda: self.root.configure(cursor=""))
 
         threading.Thread(target=stop_async, daemon=True).start()
 
     def _on_state_change(self, state: RecordingState) -> None:
         """Callback for state change."""
-        self.root.after(0, lambda: self._update_ui_state(state))
+        self._post(lambda: self._update_ui_state(state))
 
     def _update_ui_state(self, state: RecordingState) -> None:
         """Update UI based on state."""
         if state == RecordingState.IDLE:
             self._overlay.hide()
-            self.rec_btn.configure(state=tk.NORMAL, text="  REC")
-            self.pause_btn.configure(state=tk.DISABLED, text="  PAUSE")
+            self.rec_btn.configure(state=tk.NORMAL, text="  开始录音")
+            self.pause_btn.configure(state=tk.DISABLED, text="  暂停")
             self.stop_btn.configure(state=tk.DISABLED)
-            self.test_btn.configure(state=tk.NORMAL, text="Test")
+            self.test_btn.configure(state=tk.NORMAL, text="试听")
             self.mini_btn.configure(state=tk.DISABLED)
-            self.status_var.set("Ready")
+            self.status_var.set("就绪")
             self.waveform.clear()
             self.loopback_meter.clear()
             self.mic_meter.clear()
@@ -506,27 +549,27 @@ class AudioRecorderApp:
             self.rec_btn.configure(state=tk.NORMAL)
             self.pause_btn.configure(state=tk.DISABLED)
             self.stop_btn.configure(state=tk.DISABLED)
-            self.test_btn.configure(state=tk.NORMAL, text="Stop Test")
+            self.test_btn.configure(state=tk.NORMAL, text="停止试听")
             self.mini_btn.configure(state=tk.DISABLED)
-            self.status_var.set("Testing - check audio levels")
+            self.status_var.set("正在试听，请看两路音量条")
 
         elif state == RecordingState.RECORDING:
             self.rec_btn.configure(state=tk.DISABLED)
-            self.pause_btn.configure(state=tk.NORMAL, text="  PAUSE")
+            self.pause_btn.configure(state=tk.NORMAL, text="  暂停")
             self.stop_btn.configure(state=tk.NORMAL)
-            self.test_btn.configure(state=tk.DISABLED, text="Test")
+            self.test_btn.configure(state=tk.DISABLED, text="试听")
             self.mini_btn.configure(state=tk.NORMAL)
-            self.status_var.set("Recording...")
+            self.status_var.set("录音中…")
             if hasattr(self, '_mini_pause_btn'):
                 self._mini_pause_btn.configure(text="||")
 
         elif state == RecordingState.PAUSED:
             self.rec_btn.configure(state=tk.DISABLED)
-            self.pause_btn.configure(state=tk.NORMAL, text="  RESUME")
+            self.pause_btn.configure(state=tk.NORMAL, text="  继续")
             self.stop_btn.configure(state=tk.NORMAL)
             self.test_btn.configure(state=tk.DISABLED)
             self.mini_btn.configure(state=tk.NORMAL)
-            self.status_var.set("Paused")
+            self.status_var.set("已暂停")
             if hasattr(self, '_mini_pause_btn'):
                 self._mini_pause_btn.configure(text="▶")
 
@@ -536,11 +579,11 @@ class AudioRecorderApp:
             self.stop_btn.configure(state=tk.DISABLED)
             self.test_btn.configure(state=tk.DISABLED)
             self.mini_btn.configure(state=tk.DISABLED)
-            self.status_var.set("Converting to MP3...")
+            self.status_var.set("正在保存录音…")
 
     def _on_time_update(self, elapsed: float) -> None:
         """Callback for time update."""
-        self.root.after(0, lambda: self._update_time(elapsed))
+        self._post(lambda: self._update_time(elapsed))
 
     def _update_time(self, elapsed: float) -> None:
         """Update time display."""
@@ -555,28 +598,30 @@ class AudioRecorderApp:
             self.waveform.update_waveform(chunk)
             if hasattr(self, '_mini_waveform'):
                 self._mini_waveform.update_waveform(chunk)
-        self.root.after(0, update)
+        self._post(update)
 
     def _on_loopback_level(self, chunk: np.ndarray | None) -> None:
         """Callback for loopback level (during monitoring)."""
-        self.root.after(0, lambda: self.loopback_meter.update_from_audio(chunk))
+        self._post(lambda: self.loopback_meter.update_from_audio(chunk))
 
     def _on_mic_level(self, chunk: np.ndarray | None) -> None:
         """Callback for microphone level (during monitoring)."""
-        self.root.after(0, lambda: self.mic_meter.update_from_audio(chunk))
+        self._post(lambda: self.mic_meter.update_from_audio(chunk))
 
     def _on_error(self, message: str) -> None:
         """Callback for errors."""
-        self.root.after(0, lambda: messagebox.showerror("Error", message))
+        self._post(lambda: messagebox.showerror("Error", message))
 
     def _on_conversion_complete(self, path: Path) -> None:
         """Callback for conversion complete."""
-        self.root.after(0, lambda: self._show_completion(path))
+        self._post(lambda: self._show_completion(path))
 
     def _show_completion(self, path: Path) -> None:
         """Show completion message."""
-        self.status_var.set(f"Saved: {path.name}")
-        self._toast.show(f"Saved: {path.name}", duration=2000)
+        self.config.last_session = str(path)
+        self._save_config()
+        self.status_var.set(f"已保存：{path.name}")
+        self._toast.show("录音已保存，可复制交接说明", duration=3500)
 
     def _save_config(self) -> None:
         """Save current configuration."""
@@ -584,7 +629,7 @@ class AudioRecorderApp:
         display_mic = self.mic_var.get()
 
         # Save device name and sample rate
-        if display_loopback != "(None)":
+        if display_loopback != "(不录制)":
             try:
                 idx = self._loopback_display_names.index(display_loopback) - 1
                 device = self.loopback_devices[idx]
@@ -597,7 +642,7 @@ class AudioRecorderApp:
             self.config.loopback_device = ""
             self.config.loopback_sample_rate = 0
 
-        if display_mic != "(None)":
+        if display_mic != "(不录制)":
             try:
                 idx = self._mic_display_names.index(display_mic) - 1
                 device = self.input_devices[idx]
@@ -617,18 +662,43 @@ class AudioRecorderApp:
 
         save_config(self.config)
 
-    def _on_close(self) -> None:
-        """Handle application close."""
-        if self.controller.is_recording:
-            if not messagebox.askyesno(
-                "Confirm",
-                "Recording in progress. Stop and exit?"
-            ):
-                return
+    def _latest_folder(self):
+        return self.controller.last_session or (Path(self.config.last_session) if self.config.last_session else None)
 
+    def _open_recordings(self):
+        folder = self._latest_folder() or Path(self.output_folder_var.get())
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(folder)
+        except OSError as exc:
+            self._on_error(str(exc))
+
+    def _copy_handoff(self):
+        if self.controller.is_recording or self.controller.state == RecordingState.CONVERTING:
+            self._toast.show("请先停止并保存录音")
+            return
+        folder = self._latest_folder()
+        if not folder or not (folder / 'HANDOFF.md').exists():
+            self._toast.show("先完成一次录音，再复制交接说明")
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(clipboard_prompt(folder))
+        self._toast.show("已复制，可粘贴给 Codex、agy 或其他工具")
+
+    def _on_close(self):
+        if self._closing:
+            return
+        if self.controller.state == RecordingState.CONVERTING:
+            self._toast.show("正在保存，请稍后关闭")
+            return
+        if self.controller.is_recording and not messagebox.askyesno("结束录音", "停止并保存当前录音，然后退出？"):
+            return
+        self._closing = True
         self._save_config()
-        self.controller.cleanup()
-        self.root.destroy()
+        def close():
+            self.controller.cleanup()
+            self._post(self.root.destroy)
+        threading.Thread(target=close, daemon=True).start()
 
     def run(self) -> None:
         """Start application."""

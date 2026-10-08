@@ -3,10 +3,12 @@
 import logging
 import threading
 import queue
+from pathlib import Path
 from dataclasses import dataclass, field
 
 import numpy as np
 import pyaudiowpatch as pyaudio
+from writer import AudioWriter
 
 
 CHUNK_SIZE = 2048
@@ -34,6 +36,7 @@ class AudioCapture:
     _running: bool = field(default=False, repr=False)
     _queue: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=100), repr=False)
     _pyaudio: object = field(default=None, repr=False)
+    error: str = ''
 
     def start(self, p: pyaudio.PyAudio) -> None:
         """Start audio capture."""
@@ -46,7 +49,7 @@ class AudioCapture:
             rate=self.config.sample_rate,
             input=True,
             input_device_index=self.config.device_index,
-            frames_per_buffer=CHUNK_SIZE
+            frames_per_buffer=round(self.config.sample_rate * 0.04)
         )
 
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
@@ -66,7 +69,7 @@ class AudioCapture:
         """Capture loop running in separate thread."""
         while self._running:
             try:
-                data = self._stream.read(CHUNK_SIZE, exception_on_overflow=False)
+                data = self._stream.read(round(self.config.sample_rate * 0.04), exception_on_overflow=True)
                 # Convert to numpy and apply volume
                 audio = np.frombuffer(data, dtype=DTYPE).astype(np.float32)
                 audio *= self.config.volume
@@ -74,21 +77,14 @@ class AudioCapture:
                 try:
                     self._queue.put_nowait(audio)
                 except queue.Full:
-                    # Discard oldest frame if queue is full
-                    try:
-                        self._queue.get_nowait()
-                        self._queue.put_nowait(audio)
-                    except queue.Empty:
-                        pass
+                    raise RuntimeError('Audio buffer full; recording stopped to avoid silently losing audio')
             except OSError as e:
                 if self._running:
-                    logger.warning(f"Audio capture error: {e}")
-                    continue
+                    self.error = str(e)
                 break
             except Exception as e:
                 if self._running:
-                    logger.error(f"Unexpected capture error: {e}")
-                    continue
+                    self.error = str(e)
                 break
 
     def get_chunk(self) -> np.ndarray | None:
@@ -113,11 +109,15 @@ class Recorder:
         self,
         loopback_config: StreamConfig | None = None,
         mic_config: StreamConfig | None = None,
-        target_sample_rate: int = 48000
+        target_sample_rate: int = 48000,
+        track_directory: Path | None = None
     ):
         self.loopback_config = loopback_config
         self.mic_config = mic_config
         self.target_sample_rate = target_sample_rate
+        self.track_directory = track_directory
+        self._track_writers = {}
+        self.error = ''
 
         self._pyaudio: pyaudio.PyAudio | None = None
         self._loopback: AudioCapture | None = None
@@ -139,13 +139,22 @@ class Recorder:
         self._pyaudio = pyaudio.PyAudio()
         self._running = True
 
-        if self.loopback_config:
-            self._loopback = AudioCapture(self.loopback_config)
-            self._loopback.start(self._pyaudio)
-
-        if self.mic_config:
-            self._mic = AudioCapture(self.mic_config)
-            self._mic.start(self._pyaudio)
+        try:
+            for name, config in [('system', self.loopback_config), ('mic', self.mic_config)]:
+                if config and self.track_directory:
+                    writer = AudioWriter(self.track_directory, config.sample_rate,
+                                         config.channels, format='FLAC')
+                    self._track_writers[name] = writer
+                    writer.start(name + '.flac')
+            if self.loopback_config:
+                self._loopback = AudioCapture(self.loopback_config)
+                self._loopback.start(self._pyaudio)
+            if self.mic_config:
+                self._mic = AudioCapture(self.mic_config)
+                self._mic.start(self._pyaudio)
+        except Exception:
+            self.stop()
+            raise
 
         self._record_thread = threading.Thread(target=self._mix_loop, daemon=True)
         self._record_thread.start()
@@ -153,6 +162,10 @@ class Recorder:
     def stop(self) -> None:
         """Stop recording."""
         self._running = False
+
+        if self._record_thread:
+            self._record_thread.join()
+            self._record_thread = None
 
         if self._loopback:
             self._loopback.stop()
@@ -169,6 +182,9 @@ class Recorder:
         if self._pyaudio:
             self._pyaudio.terminate()
             self._pyaudio = None
+        for writer in self._track_writers.values():
+            writer.stop()
+        self._track_writers.clear()
 
     def pause(self) -> None:
         """Pause recording (discards data)."""
@@ -237,6 +253,12 @@ class Recorder:
     def _mix_loop(self) -> None:
         """Mixing loop running in separate thread."""
         while self._running:
+            for capture in (self._loopback, self._mic):
+                if capture and capture.error:
+                    self.error = capture.error
+                    self._running = False
+            if not self._running:
+                break
             loopback_chunk = None
             mic_chunk = None
 
@@ -257,6 +279,15 @@ class Recorder:
             # If paused, discard data
             if self._paused:
                 continue
+
+            try:
+                for name, chunk in [('system', loopback_chunk), ('mic', mic_chunk)]:
+                    if chunk is not None and name in self._track_writers:
+                        self._track_writers[name].write(np.clip(chunk, -32768, 32767).astype(DTYPE))
+            except Exception as exc:
+                self.error = str(exc)
+                self._running = False
+                break
 
             # Process loopback
             if loopback_chunk is not None:
@@ -281,9 +312,9 @@ class Recorder:
             # Mix
             if loopback_chunk is not None and mic_chunk is not None:
                 # Align lengths
-                min_len = min(len(loopback_chunk), len(mic_chunk))
-                loopback_chunk = loopback_chunk[:min_len]
-                mic_chunk = mic_chunk[:min_len]
+                max_len = max(len(loopback_chunk), len(mic_chunk))
+                loopback_chunk = np.pad(loopback_chunk, (0, max_len - len(loopback_chunk)))
+                mic_chunk = np.pad(mic_chunk, (0, max_len - len(mic_chunk)))
                 # Mix: simple average
                 mixed = (loopback_chunk + mic_chunk) * 0.5
             elif loopback_chunk is not None:
@@ -297,11 +328,8 @@ class Recorder:
             try:
                 self._output_queue.put_nowait(mixed)
             except queue.Full:
-                try:
-                    self._output_queue.get_nowait()
-                    self._output_queue.put_nowait(mixed)
-                except queue.Empty:
-                    pass
+                self.error = 'Output buffer full; recording stopped'
+                self._running = False
 
     def get_mixed_chunk(self, timeout: float = 0.1) -> np.ndarray | None:
         """Get a mixed chunk."""

@@ -1,16 +1,8 @@
 @echo off
-echo === Build WASAPI Audio Recorder ===
-
-REM Attiva venv
-call venv\Scripts\activate
-
-REM Installa PyInstaller se non presente
-pip install pyinstaller --quiet
-
-REM Build exe
-pyinstaller build.spec --clean
-
-echo.
-echo === Build completato! ===
-echo L'eseguibile si trova in: dist\AudioRecorder.exe
-pause
+chcp 65001 >nul
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
+cd /d "%~dp0"
+.venv\Scripts\python.exe -m PyInstaller --noconfirm build.spec
+if errorlevel 1 exit /b 1
+echo Built: dist\WaveGrab-Personal.exe

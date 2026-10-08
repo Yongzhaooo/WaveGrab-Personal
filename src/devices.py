@@ -20,11 +20,12 @@ def get_devices() -> list[AudioDevice]:
     p = pyaudio.PyAudio()
 
     try:
+        wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
         for i in range(p.get_device_count()):
             info = p.get_device_info_by_index(i)
 
             # Only devices with input channels (including loopback)
-            if info.get("maxInputChannels", 0) > 0:
+            if info.get("maxInputChannels", 0) > 0 and info["hostApi"] == wasapi:
                 devices.append(AudioDevice(
                     index=i,
                     name=info["name"],
@@ -74,3 +75,17 @@ def list_devices() -> None:
 
 if __name__ == "__main__":
     list_devices()
+
+
+def get_default_devices():
+    """Windows' current WASAPI speaker and mic, with normal UI fallback."""
+    p = pyaudio.PyAudio()
+    try:
+        api = p.get_host_api_info_by_type(pyaudio.paWASAPI)
+        try:
+            loopback = p.get_default_wasapi_loopback()['index']
+        except (OSError, LookupError):
+            loopback = -1
+        return loopback, api['defaultInputDevice']
+    finally:
+        p.terminate()
