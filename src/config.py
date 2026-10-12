@@ -19,6 +19,7 @@ CONFIG_FILE = _get_config_path()
 @dataclass
 class AppConfig:
     """Application configuration."""
+    room_mode: bool = True
     # Selected devices (by name)
     loopback_device: str = ""
     loopback_sample_rate: int = 0

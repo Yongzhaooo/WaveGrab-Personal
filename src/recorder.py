@@ -129,6 +129,7 @@ class Recorder:
         self._track_writers = {}
         self.error = ''
         self.source_frames = {'system': 0, 'mic': 0}
+        self.source_peaks = {'system': 0, 'mic': 0}
 
         self._pyaudio: pyaudio.PyAudio | None = None
         self._loopback: AudioCapture | None = None
@@ -296,6 +297,7 @@ class Recorder:
                         chunk = np.zeros(round(config.sample_rate * 0.04) * config.channels, dtype=np.float32)
                     else:
                         self.source_frames[name] += len(chunk) // config.channels
+                        self.source_peaks[name] = max(self.source_peaks[name], float(np.max(np.abs(chunk))))
                 chunks.append(chunk)
             loopback_chunk, mic_chunk = chunks
 
@@ -361,7 +363,11 @@ class Recorder:
         missing = [label for name, label, config in
                    [('system', '系统声音', self.loopback_config), ('mic', '麦克风', self.mic_config)]
                    if config and not self.source_frames[name]]
-        return ('、'.join(missing) + '未收到音频采样；请确认设备选择和播放状态。') if missing else ''
+        if missing:
+            return '、'.join(missing) + '未收到音频采样；请确认设备选择和播放状态。'
+        if self.mic_config and self.source_peaks['mic'] == 0:
+            return '麦克风采样全为零，可能被硬件或 Windows 静音，或没有输入。请检查麦克风；本程序不会自动解除静音。'
+        return ''
 
     @property
     def is_running(self) -> bool:

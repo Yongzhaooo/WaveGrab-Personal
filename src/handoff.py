@@ -37,6 +37,8 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
 - `system.flac` / `mic.flac`：所选来源的独立无损音轨，可用于听辨重叠语音。
 - `session.json`：设备、时长和文件信息。
 
+若 session.json 中 system 为 null，此次没有采集系统声音；会议室模式由麦克风收录现场声音及房间音响。
+
 独立音轨保留各自设备采样率及录制音量；不是已分离的说话人。
 暂停期间不保存声音。原音频请保留，不覆盖。
 

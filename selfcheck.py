@@ -83,6 +83,42 @@ def main():
         controller.stop_recording()
         metadata = json.loads((folder / 'session.json').read_text(encoding='utf-8'))
         assert metadata['status'] == 'incomplete' and '系统声音' in metadata['error']
+
+        # Room mode must ignore even a previously selected loopback device.
+        from devices import AudioDevice
+        speaker = AudioDevice(10, 'Test output', 2, 48000, True)
+        microphone = AudioDevice(11, 'Test mic', 1, 48000, False)
+        controller = RecordingController()
+        controller.set_loopback_device(speaker)
+        controller.set_mic_device(microphone)
+        assert controller.room_mode
+        selected = controller._make_recorder()
+        assert selected.loopback_config is None and selected.mic_config.device_index == 11
+        controller.set_room_mode(False)
+        assert controller._make_recorder().loopback_config.device_index == 10
+        muted = Recorder(mic_config=StreamConfig(11, 1, 48000))
+        muted.source_frames['mic'] = 1920
+        assert '全为零' in muted.missing_source_error()
+
+        # Exercise UI selection without accessing any real audio devices.
+        from unittest.mock import patch
+        from config import AppConfig
+        from gui.app import AudioRecorderApp
+        with patch('gui.app.get_devices', return_value=[speaker, microphone]), \
+             patch('gui.app.get_default_devices', return_value=(10, 11)), \
+             patch('gui.app.load_config', return_value=AppConfig()):
+            app = AudioRecorderApp()
+            app.root.withdraw()
+            try:
+                assert str(app.loopback_combo['state']) == 'disabled'
+                assert app.controller._make_recorder().loopback_config is None
+                app.room_mode_var.set(False)
+                app._on_room_mode_change()
+                assert str(app.loopback_combo['state']) == 'readonly'
+                assert app.controller._make_recorder().loopback_config.device_index == 10
+                assert not AppConfig.from_dict(AppConfig(room_mode=False).to_dict()).room_mode
+            finally:
+                app.root.destroy()
     print('OK: mixing, silent-source timing, empty FLAC close, incomplete status, UTF-8 handoff')
 
 

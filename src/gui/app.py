@@ -28,7 +28,7 @@ class AudioRecorderApp:
         self.root.title("WaveGrab · Personal")
         self._ui_queue = queue.SimpleQueue()
         self._closing = False
-        self.root.geometry("720x740")
+        self.root.geometry("760x800")
 
         # Window icon
         icon_path = get_base_path() / "assets" / "icon_bmp.ico"
@@ -62,6 +62,7 @@ class AudioRecorderApp:
         # UI variables
         self.loopback_var = tk.StringVar()
         self.mic_var = tk.StringVar()
+        self.room_mode_var = tk.BooleanVar(value=self.config.room_mode)
         self.loopback_vol_var = tk.DoubleVar(value=self.config.loopback_volume * 100)
         self.mic_vol_var = tk.DoubleVar(value=self.config.mic_volume * 100)
         self.output_folder_var = tk.StringVar(value=self.config.output_folder or str(Path.home() / 'Music' / 'WaveGrab'))
@@ -82,6 +83,7 @@ class AudioRecorderApp:
 
         # Restore selections
         self._restore_device_selection()
+        self._on_room_mode_change()
 
         # Bind close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -112,6 +114,13 @@ class AudioRecorderApp:
         main_frame.pack(fill=tk.BOTH, expand=True)
         self._main_frame = main_frame
 
+        self.room_mode_check = ttk.Checkbutton(
+            main_frame, text='会议室模式 · 只录麦克风',
+            variable=self.room_mode_var, command=self._on_room_mode_change)
+        self.room_mode_check.pack(anchor='w', pady=(0, 4))
+        self.mode_hint = ttk.Label(main_frame, text='', foreground=COLORS['fg_dim'])
+        self.mode_hint.pack(anchor='w', pady=(0, 10))
+
         # === Devices ===
         devices_frame = ttk.LabelFrame(main_frame, text=" 录音来源 ", padding=10)
         devices_frame.pack(fill=tk.X, pady=(0, 10))
@@ -125,6 +134,7 @@ class AudioRecorderApp:
             state="readonly",
             width=50
         )
+        self.loopback_combo = loopback_combo
         # Show name with sample rate
         self._loopback_display_names = ["(不录制)"] + [
             f"{d.name} [{d.sample_rate}Hz]" for d in self.loopback_devices
@@ -154,7 +164,7 @@ class AudioRecorderApp:
         # Test button
         self.test_btn = ttk.Button(
             devices_frame,
-            text="试听",
+            text="检查输入",
             command=self._on_test,
             width=8
         )
@@ -364,6 +374,16 @@ class AudioRecorderApp:
         preview = self.controller.get_output_filename()
         self.preview_label.configure(text=preview)
 
+    def _on_room_mode_change(self):
+        if not self.controller.set_room_mode(self.room_mode_var.get()):
+            self.room_mode_var.set(self.controller.room_mode)
+            return
+        room = self.controller.room_mode
+        self.loopback_combo.configure(state=tk.DISABLED if room else 'readonly')
+        self.mode_hint.configure(text=(
+            '录会议室里的声音；不播放音频，不改变 Teams 静音或 No audio 设置。' if room else
+            '录所选系统声音与麦克风；不改变 Teams 设置。'))
+
     def _browse_folder(self) -> None:
         """Open folder selection dialog."""
         folder = filedialog.askdirectory(
@@ -490,12 +510,12 @@ class AudioRecorderApp:
         """Start/stop device test."""
         if self.controller.state == RecordingState.MONITORING:
             self.controller.stop_monitoring()
-            self.test_btn.configure(text="试听")
+            self.test_btn.configure(text="检查输入")
             self.status_var.set("就绪")
         else:
             if self.controller.start_monitoring():
-                self.test_btn.configure(text="停止试听")
-                self.status_var.set("正在试听，请看两路音量条")
+                self.test_btn.configure(text="停止检查")
+                self.status_var.set("正在检查输入，不播放声音")
             else:
                 messagebox.showwarning("Warning", "请至少选择一个录音设备")
 
@@ -505,7 +525,7 @@ class AudioRecorderApp:
         self.controller.set_filename_prefix(self.filename_var.get())
 
         if self.controller.start_recording():
-            self.test_btn.configure(text="试听", state=tk.DISABLED)
+            self.test_btn.configure(text="检查输入", state=tk.DISABLED)
             self.status_var.set("录音中…")
 
     def _on_pause(self) -> None:
@@ -539,12 +559,13 @@ class AudioRecorderApp:
 
     def _update_ui_state(self, state: RecordingState) -> None:
         """Update UI based on state."""
+        self.room_mode_check.configure(state=tk.NORMAL if state == RecordingState.IDLE else tk.DISABLED)
         if state == RecordingState.IDLE:
             self._overlay.hide()
             self.rec_btn.configure(state=tk.NORMAL, text="  开始录音")
             self.pause_btn.configure(state=tk.DISABLED, text="  暂停")
             self.stop_btn.configure(state=tk.DISABLED)
-            self.test_btn.configure(state=tk.NORMAL, text="试听")
+            self.test_btn.configure(state=tk.NORMAL, text="检查输入")
             self.mini_btn.configure(state=tk.DISABLED)
             self.status_var.set("就绪")
             self.waveform.clear()
@@ -559,15 +580,15 @@ class AudioRecorderApp:
             self.rec_btn.configure(state=tk.NORMAL)
             self.pause_btn.configure(state=tk.DISABLED)
             self.stop_btn.configure(state=tk.DISABLED)
-            self.test_btn.configure(state=tk.NORMAL, text="停止试听")
+            self.test_btn.configure(state=tk.NORMAL, text="停止检查")
             self.mini_btn.configure(state=tk.DISABLED)
-            self.status_var.set("正在试听，请看两路音量条")
+            self.status_var.set("正在检查输入，不播放声音")
 
         elif state == RecordingState.RECORDING:
             self.rec_btn.configure(state=tk.DISABLED)
             self.pause_btn.configure(state=tk.NORMAL, text="  暂停")
             self.stop_btn.configure(state=tk.NORMAL)
-            self.test_btn.configure(state=tk.DISABLED, text="试听")
+            self.test_btn.configure(state=tk.DISABLED, text="检查输入")
             self.mini_btn.configure(state=tk.NORMAL)
             self.status_var.set("录音中…")
             if hasattr(self, '_mini_pause_btn'):
@@ -635,6 +656,7 @@ class AudioRecorderApp:
 
     def _save_config(self) -> None:
         """Save current configuration."""
+        self.config.room_mode = self.room_mode_var.get()
         display_loopback = self.loopback_var.get()
         display_mic = self.mic_var.get()
 
