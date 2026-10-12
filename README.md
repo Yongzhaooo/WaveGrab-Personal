@@ -5,6 +5,7 @@ Windows 双路录音小工具。基于 [WaveGrab](https://github.com/francescosc
 ## 使用
 
 运行 `dist/WaveGrab-Personal.exe`，或双击 `Start-WaveGrab.cmd`。
+EXE 旁边的 `_internal` 文件夹是运行所需组件，移动程序时请一起保留。
 
 1. 默认选择 Windows 当前的系统声音和麦克风，也可以手动换设备。
 2. 填录音主题，点击 **开始录音**；需要时暂停或切换 Mini 窗口。
@@ -33,7 +34,7 @@ $env:PYTHONIOENCODING='utf-8'
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
 .\.venv\Scripts\python.exe src/main_gui.py
-.\.venv\Scripts\python.exe -m PyInstaller --noconfirm build.spec
+.\build.bat
 ```
 
 离线小检查：`.\.venv\Scripts\python.exe selfcheck.py`。

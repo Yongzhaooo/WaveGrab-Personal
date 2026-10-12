@@ -72,7 +72,8 @@ class AudioWriter:
     def stop(self) -> Path | None:
         """Close file and return path."""
         with self._lock:
-            if self._file:
+            # SoundFile is false when it contains zero frames, but still needs closing.
+            if self._file is not None:
                 self._file.close()
                 self._file = None
 

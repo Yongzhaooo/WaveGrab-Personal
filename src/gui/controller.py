@@ -183,6 +183,8 @@ class RecordingController:
                 if self._recorder:
                     self._recorder.stop()
                     self._error = self._error or self._recorder.error
+                    if not monitor:
+                        self._error = self._error or self._recorder.missing_source_error()
                 self._stop_event.set()
                 if self._record_thread:
                     self._record_thread.join()

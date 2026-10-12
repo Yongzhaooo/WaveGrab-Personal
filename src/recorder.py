@@ -3,6 +3,7 @@
 import logging
 import threading
 import queue
+import time
 from pathlib import Path
 from dataclasses import dataclass, field
 
@@ -37,11 +38,13 @@ class AudioCapture:
     _queue: queue.Queue = field(default_factory=lambda: queue.Queue(maxsize=100), repr=False)
     _pyaudio: object = field(default=None, repr=False)
     error: str = ''
+    _stop_event: threading.Event = field(default_factory=threading.Event, repr=False)
 
     def start(self, p: pyaudio.PyAudio) -> None:
         """Start audio capture."""
         self._pyaudio = p
         self._running = True
+        self._stop_event.clear()
 
         self._stream = p.open(
             format=FORMAT,
@@ -58,8 +61,9 @@ class AudioCapture:
     def stop(self) -> None:
         """Stop audio capture."""
         self._running = False
+        self._stop_event.set()
         if self._thread:
-            self._thread.join(timeout=2.0)
+            self._thread.join()
         if self._stream:
             self._stream.stop_stream()
             self._stream.close()
@@ -69,7 +73,13 @@ class AudioCapture:
         """Capture loop running in separate thread."""
         while self._running:
             try:
-                data = self._stream.read(round(self.config.sample_rate * 0.04), exception_on_overflow=True)
+                frames = round(self.config.sample_rate * 0.04)
+                # An idle WASAPI output may deliver no packets. Never block read()
+                # waiting for it: this also lets Stop close the stream promptly.
+                if self._stream.get_read_available() < frames:
+                    self._stop_event.wait(0.005)
+                    continue
+                data = self._stream.read(frames, exception_on_overflow=True)
                 # Convert to numpy and apply volume
                 audio = np.frombuffer(data, dtype=DTYPE).astype(np.float32)
                 audio *= self.config.volume
@@ -118,6 +128,7 @@ class Recorder:
         self.track_directory = track_directory
         self._track_writers = {}
         self.error = ''
+        self.source_frames = {'system': 0, 'mic': 0}
 
         self._pyaudio: pyaudio.PyAudio | None = None
         self._loopback: AudioCapture | None = None
@@ -174,10 +185,6 @@ class Recorder:
         if self._mic:
             self._mic.stop()
             self._mic = None
-
-        if self._record_thread:
-            self._record_thread.join(timeout=2.0)
-            self._record_thread = None
 
         if self._pyaudio:
             self._pyaudio.terminate()
@@ -252,7 +259,9 @@ class Recorder:
 
     def _mix_loop(self) -> None:
         """Mixing loop running in separate thread."""
+        deadline = time.monotonic()
         while self._running:
+            deadline += 0.04
             for capture in (self._loopback, self._mic):
                 if capture and capture.error:
                     self.error = capture.error
@@ -264,21 +273,31 @@ class Recorder:
 
             # Get chunks
             if self._loopback:
-                loopback_chunk = self._loopback.get_chunk_blocking(timeout=0.05)
-                if loopback_chunk is not None:
-                    self._last_loopback_chunk = loopback_chunk.copy()
+                loopback_chunk = self._loopback.get_chunk_blocking(timeout=max(0, deadline - time.monotonic()))
+                self._last_loopback_chunk = loopback_chunk
             if self._mic:
-                mic_chunk = self._mic.get_chunk_blocking(timeout=0.05)
-                if mic_chunk is not None:
-                    self._last_mic_chunk = mic_chunk.copy()
+                mic_chunk = self._mic.get_chunk_blocking(timeout=max(0, deadline - time.monotonic()))
+                self._last_mic_chunk = mic_chunk
 
-            # If no data, continue
-            if loopback_chunk is None and mic_chunk is None:
-                continue
+            time.sleep(max(0, deadline - time.monotonic()))
 
             # If paused, discard data
             if self._paused:
                 continue
+
+            # Keep both tracks on the recording clock when a device is silent.
+            # ponytail: 40 ms blocks align speech recordings; sample-exact sync
+            # across independent device clocks would need timestamped resampling.
+            chunks = []
+            for name, config, chunk in [('system', self.loopback_config, loopback_chunk),
+                                         ('mic', self.mic_config, mic_chunk)]:
+                if config:
+                    if chunk is None:
+                        chunk = np.zeros(round(config.sample_rate * 0.04) * config.channels, dtype=np.float32)
+                    else:
+                        self.source_frames[name] += len(chunk) // config.channels
+                chunks.append(chunk)
+            loopback_chunk, mic_chunk = chunks
 
             try:
                 for name, chunk in [('system', loopback_chunk), ('mic', mic_chunk)]:
@@ -337,6 +356,12 @@ class Recorder:
             return self._output_queue.get(timeout=timeout)
         except queue.Empty:
             return None
+
+    def missing_source_error(self) -> str:
+        missing = [label for name, label, config in
+                   [('system', '系统声音', self.loopback_config), ('mic', '麦克风', self.mic_config)]
+                   if config and not self.source_frames[name]]
+        return ('、'.join(missing) + '未收到音频采样；请确认设备选择和播放状态。') if missing else ''
 
     @property
     def is_running(self) -> bool:

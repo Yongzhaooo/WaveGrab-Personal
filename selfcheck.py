@@ -51,7 +51,39 @@ def main():
         assert 'transcript.clean.md' in (folder / 'HANDOFF.md').read_text(encoding='utf-8')
         assert str(folder) in clipboard_prompt(folder)
         assert session_name('会议') != session_name('会议')
-    print('OK: mixed audio, source tracks, UTF-8 handoff, unique session folders')
+
+        # A never-written SoundFile has false truthiness but must still close.
+        empty = AudioWriter(folder, format='FLAC')
+        empty_path = empty.start('empty.flac')
+        handle = empty._file
+        empty.stop()
+        assert handle.closed and not empty.is_open
+
+        # Silent loopback still occupies the same 40 ms as the microphone.
+        recorder.source_frames = {'system': 0, 'mic': 0}
+        recorder._track_writers = {}
+        recorder._loopback = Capture(None)
+        recorder._mic = Capture(np.full(1764, 3000, dtype=np.float32), last=True)
+        recorder._running = True
+        recorder._mix_loop()
+        mixed = recorder.get_mixed_chunk()
+        assert mixed.size == 3840 and np.all(mixed == 1500)
+        assert '系统声音' in recorder.missing_source_error()
+
+        # Controller must not publish a successful session for a missing source.
+        from gui.controller import RecordingController, RecordingState
+        controller = RecordingController()
+        controller.last_session = folder
+        controller._state = RecordingState.RECORDING
+        class MissingSource:
+            error = ''
+            def stop(self): pass
+            def missing_source_error(self): return '系统声音未收到音频采样'
+        controller._recorder = MissingSource()
+        controller.stop_recording()
+        metadata = json.loads((folder / 'session.json').read_text(encoding='utf-8'))
+        assert metadata['status'] == 'incomplete' and '系统声音' in metadata['error']
+    print('OK: mixing, silent-source timing, empty FLAC close, incomplete status, UTF-8 handoff')
 
 
 if __name__ == '__main__':

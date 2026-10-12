@@ -14,7 +14,7 @@ from paths import get_base_path, get_src_path
 import sys
 sys.path.insert(0, str(get_src_path()))
 
-from devices import AudioDevice, get_loopback_devices, get_input_devices, get_default_devices
+from devices import AudioDevice, get_devices, get_default_devices
 from config import AppConfig, load_config, save_config
 from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, ToastNotification, COLORS, apply_dark_theme
 from .controller import RecordingController, RecordingCallbacks, RecordingState
@@ -44,8 +44,9 @@ class AudioRecorderApp:
         apply_dark_theme(self.root)
 
         # Load devices
-        self.loopback_devices = get_loopback_devices()
-        self.input_devices = get_input_devices()
+        devices = get_devices()
+        self.loopback_devices = [d for d in devices if d.is_loopback]
+        self.input_devices = [d for d in devices if not d.is_loopback]
 
         # Controller
         self.controller = RecordingController(RecordingCallbacks(
@@ -324,11 +325,13 @@ class AudioRecorderApp:
                     self._on_loopback_change(None)
                     break
 
-        if not self.config.loopback_device and self.loopback_devices:
+        if self.loopback_var.get() == '(不录制)' and self.loopback_devices:
             defaults = get_default_devices()
             selected = next((i for i, d in enumerate(self.loopback_devices) if d.index == defaults[0]), 0)
             self.loopback_var.set(self._loopback_display_names[selected + 1])
             self._on_loopback_change(None)
+            if self.config.loopback_device:
+                self.status_var.set('之前的系统声音设备不可用，已选择当前默认设备')
         if not self.config.mic_device and self.input_devices:
             defaults = get_default_devices()
             selected = next((i for i, d in enumerate(self.input_devices) if d.index == defaults[1]), 0)
@@ -347,6 +350,13 @@ class AudioRecorderApp:
                     self.mic_var.set(self._mic_display_names[i + 1])
                     self._on_mic_change(None)
                     break
+
+        if self.mic_var.get() == '(不录制)' and self.input_devices:
+            defaults = get_default_devices()
+            selected = next((i for i, d in enumerate(self.input_devices) if d.index == defaults[1]), 0)
+            self.mic_var.set(self._mic_display_names[selected + 1])
+            self._on_mic_change(None)
+            self.status_var.set('之前的麦克风不可用，已选择当前默认设备')
 
     def _update_preview(self) -> None:
         """Update filename preview."""
