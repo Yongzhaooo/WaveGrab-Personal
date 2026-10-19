@@ -8,7 +8,7 @@ import sys
 import tempfile
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
 from handoff import clipboard_prompt
 from paths import get_base_path, get_exe_dir, get_src_path, is_frozen
@@ -143,7 +143,7 @@ class TranscriptPanel(ttk.Frame):
             self.select_speaker()
             self.status.set(f'{len(speaker_ids(self.data))} 位说话人 · {len(self.data["segments"])} 段发言 · 已导出 Markdown / SRT')
         except Exception as exc:
-            messagebox.showerror('结果未刷新', f'{exc}\n原始录音和识别结果保留。')
+            self.status.set(f'结果未刷新：{exc}；原始录音和识别结果保留。')
         self._controls()
 
     def select_speaker(self, _=None):
@@ -155,7 +155,7 @@ class TranscriptPanel(ttk.Frame):
             rename_speaker(self.folder, self._speaker_lookup.get(self.speaker_var.get(), ''), self.name_var.get())
             self.reload()
         except Exception as exc:
-            messagebox.showerror('改名未完成', str(exc))
+            self.status.set(f'改名未完成：{exc}')
 
     def show_segment(self, _=None):
         selected = self.tree.selection()
@@ -181,13 +181,15 @@ class TranscriptPanel(ttk.Frame):
         text = tk.Text(dialog, wrap='word', font=('Microsoft YaHei UI', 11), padx=12, pady=12)
         text.pack(fill='both', expand=True, padx=12, pady=12)
         text.insert('1.0', self.edits.get(item['id'], item['text']))
+        save_status = tk.StringVar()
+        ttk.Label(dialog, textvariable=save_status, wraplength=560).pack(fill='x', padx=12)
         def save():
             try:
                 edit_segment(folder, item['id'], text.get('1.0', 'end-1c'))
                 dialog.destroy()
                 self.reload()
             except Exception as exc:
-                messagebox.showerror('保存未完成', str(exc), parent=dialog)
+                save_status.set(f'保存未完成：{exc}')
         ttk.Button(dialog, text='保存校正并更新导出', style='Accent.TButton', command=save).pack(pady=(0, 12))
 
     def open_exports(self):
@@ -195,7 +197,7 @@ class TranscriptPanel(ttk.Frame):
             export_result(self.folder)
             os.startfile(self.folder / 'exports')
         except Exception as exc:
-            messagebox.showerror('导出失败', str(exc))
+            self.status.set(f'导出失败：{exc}')
 
     def copy_handoff(self):
         self.clipboard_clear()
@@ -206,12 +208,12 @@ class TranscriptPanel(ttk.Frame):
         if self.busy or not self.folder:
             return
         if not self.recording_idle():
-            messagebox.showinfo('先停止录音', '请先停止录音或输入检查，再处理文字。')
+            self.status.set('请先停止录音或输入检查，再处理文字。')
             return
         home = get_exe_dir() if is_frozen() else get_exe_dir() / 'dist'
         python = home / '.runtime' / 'Scripts' / 'python.exe'
         if not python.exists():
-            messagebox.showerror('本地转录组件未安装', '请先在源码目录运行 Setup-Transcription.cmd。')
+            self.status.set('本地转录组件未安装：请先在源码目录运行 Setup-Transcription.cmd。')
             return
         try:
             count = self.count.get()
@@ -226,7 +228,7 @@ class TranscriptPanel(ttk.Frame):
             if session.exists() and json.loads(session.read_text(encoding='utf-8')).get('status') == 'recording':
                 raise ValueError('这个会话仍标记为录制中，请先停止保存。')
         except Exception as exc:
-            messagebox.showerror('无法开始', str(exc))
+            self.status.set(f'无法开始：{exc}')
             return
         self.busy = True
         self.cancelled.clear()
@@ -284,8 +286,7 @@ class TranscriptPanel(ttk.Frame):
         if self.cancelled.is_set():
             self.status.set('已取消 · 原始录音保留')
         elif error:
-            self.status.set('处理未完成 · 原始录音保留')
-            messagebox.showerror('转录未完成', error)
+            self.status.set(f'处理未完成 · 原始录音保留：{error}')
         else:
             self.reload()
         self._controls()

@@ -74,7 +74,7 @@ class VisualTests(unittest.TestCase):
         screen = WindowSnapshots(WindowTarget(123, 1, 'meeting'), self.timeline, lambda: True, Mock())
         with patch('visuals.window_status', return_value=''), patch('windows_capture.WindowsCapture') as capture:
             screen.start()
-            capture.assert_called_once_with(window_hwnd=123, cursor_capture=False,
+            capture.assert_called_once_with(window_hwnd=123, cursor_capture=False, draw_border=False,
                 secondary_window=False, minimum_update_interval=3000)
             screen.stop()
             capture.return_value.start_free_threaded.return_value.stop.assert_called_once()
@@ -122,6 +122,22 @@ class VisualTests(unittest.TestCase):
                          [(None, 1, 0x4001, ord('R')), (None, 2, 0x4001, ord('M'))])
         self.assertEqual(api.user32.UnregisterHotKey.call_count, 2)
 
+    def test_status_and_markers_use_tooltip_without_notifications(self):
+        from desktop import DesktopControls
+        controls = DesktopControls.__new__(DesktopControls)
+        controls.state = '就绪'
+        controls.icon = Mock()
+        controls.update('录音中')
+        controls.set_detail('标记 1 · 00:12')
+        self.assertIn('录音中 · 标记 1', controls.icon.title)
+        controls.set_detail('请重新选择会议窗口', error=True)
+        self.assertIn('请重新选择会议窗口', controls.icon.title)
+        controls.icon.notify.assert_not_called()
+        idle = controls._image('就绪')
+        recording = controls._image('录音中')
+        self.assertEqual(idle.getpixel((12, 32)), recording.getpixel((12, 32)))
+        self.assertNotEqual(idle.getpixel((52, 52)), recording.getpixel((52, 52)))
+
     def test_close_hides_without_stopping_and_hotkey_routes(self):
         from config import AppConfig
         from gui.app import AudioRecorderApp
@@ -146,6 +162,12 @@ class VisualTests(unittest.TestCase):
                 app._on_close()
                 self.assertEqual(app.root.state(), 'withdrawn')
                 cleanup.assert_not_called()
+                app._report_error('窗口已关闭，截图停止')
+                self.assertEqual(app.root.state(), 'withdrawn')
+                self.assertIn('窗口已关闭', app.status_var.get())
+                app.desktop.set_detail.assert_called_with('窗口已关闭，截图停止', error=True)
+                app._show_completion(self.folder)
+                self.assertIn('窗口已关闭', app.status_var.get())
             with patch.object(app, '_on_rec') as start, patch.object(app, '_on_stop') as stop:
                 app._toggle_recording()
                 start.assert_called_once()

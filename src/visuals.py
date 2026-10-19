@@ -142,7 +142,7 @@ class WindowSnapshots:
         if reason:
             raise ValueError(reason + '，请恢复并重新选择 Teams 会议窗口。')
         from windows_capture import WindowsCapture
-        self.capture = WindowsCapture(window_hwnd=self.target.hwnd, cursor_capture=False,
+        self.capture = WindowsCapture(window_hwnd=self.target.hwnd, cursor_capture=False, draw_border=False,
                                       secondary_window=False, minimum_update_interval=3000)
         self.capture.frame_handler = self._frame
         self.capture.closed_handler = self._closed

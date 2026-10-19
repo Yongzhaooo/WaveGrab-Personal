@@ -1,7 +1,7 @@
 """Main application window."""
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 from pathlib import Path
 import threading
 import os
@@ -17,7 +17,7 @@ sys.path.insert(0, str(get_src_path()))
 from devices import AudioDevice, get_devices, get_default_devices, get_system_sources
 from config import AppConfig, load_config, save_config
 from visuals import teams_windows, window_status
-from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, ToastNotification, COLORS, apply_light_theme
+from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, COLORS, apply_light_theme
 from .transcripts import TranscriptPanel
 from .controller import RecordingController, RecordingCallbacks, RecordingState
 
@@ -30,6 +30,7 @@ class AudioRecorderApp:
         self.root.title("WaveGrab · Personal")
         self._ui_queue = queue.SimpleQueue()
         self._closing = False
+        self._last_error = ''
         self.desktop = None
         self._screen_windows = []
         self.root.geometry("940x670")
@@ -84,9 +85,8 @@ class AudioRecorderApp:
         # Create UI
         self._create_ui()
 
-        # Overlay and toast
+        # Save progress stays inside the existing window.
         self._overlay = OverlayProgress(self.root, "正在保存录音…")
-        self._toast = ToastNotification(self.root)
 
         # Restore selections
         self._restore_device_selection()
@@ -416,7 +416,7 @@ class AudioRecorderApp:
     def _on_test(self) -> None:
         """Start/stop device test."""
         if self.result_panel.busy:
-            messagebox.showinfo('正在处理文字', '请先完成或取消转录。')
+            self._report_error('请先完成或取消转录。')
             return
         if self.controller.state == RecordingState.MONITORING:
             self.controller.stop_monitoring()
@@ -427,14 +427,14 @@ class AudioRecorderApp:
                 self.test_btn.configure(text="停止检查")
                 self.status_var.set("正在检查输入，不播放声音")
             else:
-                messagebox.showwarning("Warning", "请至少选择一个录音设备")
+                self._report_error('请至少选择一个可用录音设备')
 
     def _on_rec(self) -> None:
         """Start recording."""
         if self.controller.state not in (RecordingState.IDLE, RecordingState.MONITORING):
             return
         if self.result_panel.busy:
-            messagebox.showinfo('正在处理文字', '请等转录完成或取消后再开始录音。')
+            self._report_error('请等转录完成或取消后再开始录音。')
             return
         self.controller.set_output_folder(self.output_folder_var.get())
         self.controller.set_filename_prefix(self.filename_var.get())
@@ -442,23 +442,22 @@ class AudioRecorderApp:
         if self.screenshots_var.get():
             index = self.screen_combo.current()
             if index < 0 or index >= len(self._screen_windows):
-                self._show_window()
-                messagebox.showinfo('选择会议窗口', '请先刷新并选择要截图的 Teams 会议窗口。')
+                self._report_error('请先刷新并选择要截图的 Teams 会议窗口。')
                 return
             target = self._screen_windows[index]
             reason = window_status(target)
             if reason:
-                self._show_window()
-                messagebox.showinfo('会议窗口不可用', reason + '，请恢复会议窗口后重试。')
+                self._report_error(reason + '，请恢复会议窗口后重试。')
                 return
             self.controller.screen_target = target
 
+        self._last_error = ''
         if self.controller.start_recording():
             self.test_btn.configure(text="检查输入", state=tk.DISABLED)
             self.status_var.set("录音中…")
             self._save_config()
             if self.desktop:
-                self.desktop.notify('录音已开始 · Alt+M 打标，Alt+R 停止')
+                self.desktop.set_detail('Alt+M 打标，Alt+R 停止')
 
     def _on_pause(self) -> None:
         """Pause or resume recording."""
@@ -590,11 +589,10 @@ class AudioRecorderApp:
         self._post(lambda: self._report_error(message))
 
     def _report_error(self, message):
+        self._last_error = message
         self.status_var.set(message)
-        if self.desktop and self.root.state() == 'withdrawn':
-            self.desktop.notify(message)
-        else:
-            messagebox.showerror('WaveGrab', message)
+        if self.desktop:
+            self.desktop.set_detail(message, error=True)
 
     def _on_conversion_complete(self, path: Path) -> None:
         """Callback for conversion complete."""
@@ -606,10 +604,12 @@ class AudioRecorderApp:
         self.tabs.select(self.result_panel)
         self.config.last_session = str(path)
         self._save_config()
-        self.status_var.set(f"已保存：{path.name}")
-        self._toast.show("录音已保存，可复制交接说明", duration=3500)
-        if self.desktop:
-            self.desktop.notify('录音已保存 · 托盘菜单可回看画面与标记')
+        if self._last_error:
+            self._report_error(self._last_error)
+        else:
+            self.status_var.set(f"已保存：{path.name}")
+        if self.desktop and not self._last_error:
+            self.desktop.set_detail('录音已保存 · 可回看画面与标记')
 
     def _save_config(self) -> None:
         """Save current configuration."""
@@ -665,15 +665,15 @@ class AudioRecorderApp:
 
     def _copy_handoff(self):
         if self.controller.is_recording or self.controller.state == RecordingState.CONVERTING:
-            self._toast.show("请先停止并保存录音")
+            self.status_var.set('请先停止并保存录音')
             return
         folder = self._latest_folder()
         if not folder or not (folder / 'HANDOFF.md').exists():
-            self._toast.show("先完成一次录音，再复制交接说明")
+            self.status_var.set('先完成一次录音，再复制交接说明')
             return
         self.root.clipboard_clear()
         self.root.clipboard_append(clipboard_prompt(folder))
-        self._toast.show("已复制，可粘贴给 Codex、agy 或其他工具")
+        self.status_var.set('已复制，可粘贴给 Codex、agy 或其他工具')
 
     def _refresh_windows(self):
         if self.controller.state != RecordingState.IDLE:
@@ -695,7 +695,7 @@ class AudioRecorderApp:
                 text = f"{marker['label']} · {int(marker['seconds']) // 60:02d}:{int(marker['seconds']) % 60:02d}"
                 self.status_var.set(text)
                 if self.desktop:
-                    self.desktop.notify(text)
+                    self.desktop.set_detail(text)
             else:
                 self.status_var.set('录音开始后可打标')
         except OSError as exc:
@@ -728,12 +728,10 @@ class AudioRecorderApp:
             return
         if self.result_panel.busy:
             self.result_panel.cancel()
-            self._toast.show('正在取消转录，请稍后关闭')
+            self.status_var.set('正在取消转录，请稍后退出')
             return
         if self.controller.state == RecordingState.CONVERTING:
-            self._toast.show("正在保存，请稍后关闭")
-            return
-        if self.controller.is_recording and not messagebox.askyesno("结束录音", "停止并保存当前录音，然后退出？"):
+            self.status_var.set('正在保存，请稍后退出')
             return
         self._closing = True
         self._save_config()
@@ -751,6 +749,6 @@ class AudioRecorderApp:
             self._add_marker, self._open_review, self._exit, self._report_error)
         if self.desktop.start():
             self.root.withdraw()
-            self.desktop.notify('已在托盘就绪 · 右键设置，Alt+R 开始/停止，Alt+M 打标')
+            self.desktop.set_detail('右键设置 · Alt+R 开始/停止，Alt+M 打标')
         self._refresh_windows()
         self.root.mainloop()
