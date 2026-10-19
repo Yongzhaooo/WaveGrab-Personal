@@ -6,6 +6,16 @@
 
 运行 `dist/WaveGrab-Personal.exe` 或双击 `Start-WaveGrab.cmd`。
 
+程序默认驻留系统托盘（绿色麦克风图标）；双击图标或右键“打开 WaveGrab”显示设置。关闭主窗口只是隐藏，录音继续；托盘“退出”才退出程序。录音时图标变红。
+
+- **Alt+R**：全局开始／停止并保存录音。
+- **Alt+M**：给当前录音打一个带时间的标记。
+- 快捷键被其他软件占用时会提示，可使用托盘菜单完成同样操作。
+
+**会议截图**：刷新并选择 Teams 会议窗口，开启“Teams 截图”。录音时约 3 秒保存一张压缩 JPEG，保持比例缩小到 1280×720 内，完全重复画面不另存。只捕获选定窗口，包括其中共享的画面和参会者，不捕获它外面的桌面或其他应用。窗口可以放在其他窗口后面；真正最小化后暂停截图、录音继续，恢复后继续截图。窗口关闭后不自动切换目标；下次启动程序需重新选会议窗口。
+
+**快速回看**：停止保存后点击“回看画面与标记”，或使用托盘菜单。也可双击会话中的 `review.html`，点击标记跳转音频与对应截图，拖动时间轴查看画面。音频不会自动播放；截图缺失时明确显示上一张的采集时间。暂停时音频与截图一起暂停，标记时间扣除暂停时长。
+
 **录音**：默认会议室模式，只读取所选麦克风。它收录现场人员及房间音响，不播放声音，不修改 Teams 的静音或 No audio 设置。取消会议室模式可录系统声音和麦克风两路。录音前可点“检查输入”，暂停和 Mini 窗口仍可使用。
 
 **Teams 无外放录音**：单独安装 [VB-CABLE](https://vb-audio.com/Cable/) 后，按以下方式配置：
@@ -30,6 +40,8 @@ VB-CABLE 是单独安装的非开源 donationware 驱动，不随本项目打包
 | --- | --- |
 | `mixed.flac`、`mic.flac`、`system.flac` | 无损合成音频及所选来源；会议室模式没有系统音轨 |
 | `session.json`、`HANDOFF.md` | 录音状态、设备及通用交接 |
+| `screenshots/*.jpg`、`timeline.jsonl` | 所选窗口的压缩截图、录音时间、标记及采集状态 |
+| `review.html` | 不联网的画面与音频回看页，标记可点击定位 |
 | `transcript.raw.json`、`transcript.raw.md` | 一次识别的原始结果，包含稳定片段和 speaker ID，不覆盖 |
 | `speakers.json` | 当前会议的显示名映射 |
 | `transcript.edits.json` | 清洗或校正文字，格式如 `{"seg_00001": "校正后的内容"}` |
@@ -63,10 +75,11 @@ python -m venv .venv
 ```powershell
 .\.venv\Scripts\python.exe selfcheck.py
 .\.venv\Scripts\python.exe -m unittest test_transcripts -v
+.\.venv\Scripts\python.exe -m unittest test_visuals -v
 ```
 
-这些检查覆盖录音保存、会议室模式、转录结果保护、改名/清洗导出和 UI 状态，不开启麦克风。
+这些检查覆盖录音保存、会议室模式、转录结果保护、改名/清洗导出、截图边界与压缩、标记和托盘 UI 状态，不开启麦克风或实际捕获桌面。
 
-实际混合会议、回声和多人抢话的质量待真实样本验证；未知或明确重叠的片段会单独标记。程序不会启用被 Windows 禁用的设备或解除硬件静音。5 秒截图仍是后续需求。
+实际混合会议、回声和多人抢话的质量待真实样本验证；未知或明确重叠的片段会单独标记。程序不会启用被 Windows 禁用的设备或解除硬件静音。截图使用 Windows Graphics Capture；本机 Windows 11 已完成 Teams 窗口采集验证，最小化时不保证会议应用继续渲染新画面。
 
 产品要求见 [docs/product.md](docs/product.md)，结构与取舍见 [docs/architecture.md](docs/architecture.md)。原作者声明与源码许可证见 [LICENSE](LICENSE)。

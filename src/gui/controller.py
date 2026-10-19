@@ -13,6 +13,7 @@ from devices import AudioDevice
 from recorder import Recorder, StreamConfig
 from writer import AudioWriter
 from handoff import session_name, write_handoff
+from visuals import VisualTimeline, WindowSnapshots
 
 
 class RecordingState(Enum):
@@ -54,6 +55,8 @@ class RecordingController:
         self._error = ''
         self._session_devices = {}
         self._session_title = ''
+        self.screen_target = None
+        self.timeline = self.screens = None
 
     def _notify(self, name, value):
         callback = getattr(self.callbacks, name)
@@ -123,6 +126,11 @@ class RecordingController:
     def start_recording(self):
         return self._start(monitor=False)
 
+    def add_marker(self):
+        if self.is_recording and self.timeline:
+            return self.timeline.mark()
+        return None
+
     def _start(self, monitor):
         if self._state not in (RecordingState.IDLE, RecordingState.MONITORING):
             return False
@@ -168,6 +176,24 @@ class RecordingController:
         self._total_paused = 0
         self._set_state(RecordingState.MONITORING if monitor else RecordingState.RECORDING)
         self._record_thread = threading.Thread(target=self._record_loop, daemon=True)
+        if not monitor:
+            try:
+                self.timeline = VisualTimeline(folder, lambda: self.elapsed_time)
+                if self.screen_target:
+                    self.screens = WindowSnapshots(self.screen_target, self.timeline,
+                        lambda: self._state == RecordingState.RECORDING,
+                        lambda message: self._notify('on_error', message))
+                    self.screens.start()
+            except Exception as exc:
+                message = f'画面或标记不可用，录音继续：{exc}'
+                if self.screens:
+                    self.screens.failure = message
+                if self.timeline:
+                    try:
+                        self.timeline.note(message)
+                    except OSError:
+                        pass
+                self._notify('on_error', message)
         self._record_thread.start()
         return True
 
@@ -176,12 +202,16 @@ class RecordingController:
             self._recorder.pause()
             self._pause_start = time.monotonic()
             self._set_state(RecordingState.PAUSED)
+            if self.timeline:
+                self.timeline.note('已暂停录音与截图')
 
     def resume_recording(self):
         if self._state == RecordingState.PAUSED:
             self._total_paused += time.monotonic() - self._pause_start
             self._recorder.resume()
             self._set_state(RecordingState.RECORDING)
+            if self.timeline:
+                self.timeline.note('继续录音与截图')
 
     def stop_monitoring(self):
         if self._state == RecordingState.MONITORING:
@@ -195,6 +225,11 @@ class RecordingController:
             duration = self.elapsed_time
             self._set_state(RecordingState.CONVERTING)
             try:
+                if self.screens:
+                    try:
+                        self.screens.stop()
+                    except Exception as exc:
+                        self._notify('on_error', f'停止截图时出错：{exc}')
                 if self._recorder:
                     self._recorder.stop()
                     self._error = self._error or self._recorder.error
@@ -206,6 +241,11 @@ class RecordingController:
                 if self._writer:
                     duration = self._writer.duration_seconds
                     self._writer.stop()
+                if self.timeline:
+                    try:
+                        self.timeline.finish()
+                    except Exception as exc:
+                        self._notify('on_error', f'回看页未生成，原录音与时间轴保留：{exc}')
                 if not monitor and self.last_session:
                     write_handoff(self.last_session, self._session_title,
                                   self._session_devices, duration,
@@ -214,6 +254,7 @@ class RecordingController:
                 self._error = self._error or str(exc)
             finally:
                 self._recorder = self._writer = self._record_thread = None
+                self.timeline = self.screens = None
                 self._set_state(RecordingState.IDLE)
             if self._error:
                 self._notify('on_error', '录音已停止，已录文件保留：' + self._error)

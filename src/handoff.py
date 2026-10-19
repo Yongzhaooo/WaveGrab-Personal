@@ -18,6 +18,8 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
         'title': title or 'recording', 'status': status, 'error': error,
         'duration_seconds': round(duration, 3),
         'audio_files': tracks,
+        'visual_files': [name for name in ('timeline.jsonl', 'review.html', 'screenshots')
+                         if (folder / name).exists()],
         'devices': {name: asdict(device) if device else None
                     for name, device in devices.items()},
         'created_at': datetime.now().astimezone().isoformat(),
@@ -41,6 +43,14 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
 
 独立音轨保留各自设备采样率及录制音量；不是已分离的说话人。
 暂停期间不保存声音。原音频请保留，不覆盖。
+
+## 画面与标记（如有）
+
+`review.html` 是本地回看页，点击标记可定位音频与画面，不自动播放音频。
+`timeline.jsonl` 逐行保存截图、标记和采集状态，`seconds` 对应不含暂停的录音时间。
+`screenshots/` 只保存用户选定 Teams 窗口的压缩 JPEG，约 3 秒一张，重复画面不另存。
+最小化、关闭窗口或录音暂停时没有新截图；旧画面不能当成该时间的新证据。
+结合标记和画面理解发言，保留原截图与时间轴，不补造缺失画面。
 
 ## 处理请求（适用于 Codex、agy 或其他工具）
 

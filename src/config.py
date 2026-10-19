@@ -20,6 +20,7 @@ CONFIG_FILE = _get_config_path()
 class AppConfig:
     """Application configuration."""
     room_mode: bool = True
+    screenshots_enabled: bool = False
     # Selected devices (by name)
     loopback_device: str = ""
     loopback_sample_rate: int = 0

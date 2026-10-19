@@ -16,6 +16,7 @@ sys.path.insert(0, str(get_src_path()))
 
 from devices import AudioDevice, get_devices, get_default_devices, get_system_sources
 from config import AppConfig, load_config, save_config
+from visuals import teams_windows, window_status
 from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, ToastNotification, COLORS, apply_light_theme
 from .transcripts import TranscriptPanel
 from .controller import RecordingController, RecordingCallbacks, RecordingState
@@ -29,13 +30,15 @@ class AudioRecorderApp:
         self.root.title("WaveGrab · Personal")
         self._ui_queue = queue.SimpleQueue()
         self._closing = False
-        self.root.geometry("940x760")
+        self.desktop = None
+        self._screen_windows = []
+        self.root.geometry("940x670")
 
         # Window icon
         icon_path = get_base_path() / "assets" / "icon_bmp.ico"
         if icon_path.exists():
             self.root.iconbitmap(str(icon_path))
-        self.root.minsize(820, 660)
+        self.root.minsize(820, 640)
         self.root.resizable(True, True)
 
         # Load configuration
@@ -64,6 +67,9 @@ class AudioRecorderApp:
         self.loopback_var = tk.StringVar()
         self.mic_var = tk.StringVar()
         self.room_mode_var = tk.BooleanVar(value=self.config.room_mode)
+        self.screenshots_var = tk.BooleanVar(value=self.config.screenshots_enabled)
+        self.screen_window_var = tk.StringVar(value='点击刷新，选择 Teams 会议窗口')
+        self.screen_status_var = tk.StringVar(value='只截所选窗口；最小化时暂停截图，录音继续')
         self.loopback_vol_var = tk.DoubleVar(value=self.config.loopback_volume * 100)
         self.mic_vol_var = tk.DoubleVar(value=self.config.mic_volume * 100)
         self.output_folder_var = tk.StringVar(value=self.config.output_folder or str(Path.home() / 'Music' / 'WaveGrab'))
@@ -113,22 +119,22 @@ class AudioRecorderApp:
             pass
 
     def _create_ui(self):
-        self._main_frame = ttk.Frame(self.root, padding=16)
+        self._main_frame = ttk.Frame(self.root, padding=8)
         self._main_frame.pack(fill='both', expand=True)
         top = ttk.Frame(self._main_frame)
-        top.pack(fill='x', pady=(0, 12))
+        top.pack(fill='x', pady=(0, 4))
         ttk.Label(top, text='WaveGrab', style='Brand.TLabel').pack(side='left')
         ttk.Label(top, text='把会议留下来', style='Muted.TLabel').pack(side='left', padx=14)
+        ttk.Button(top, text='隐藏到托盘', command=self._hide_window).pack(side='right')
         self.tabs = ttk.Notebook(self._main_frame)
         self.tabs.pack(fill='both', expand=True)
-        page = ttk.Frame(self.tabs, padding=24)
+        page = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(page, text='  录音  ')
         self.result_panel = TranscriptPanel(self.tabs, self._post,
             lambda: self.controller.state == RecordingState.IDLE)
         self.tabs.add(self.result_panel, text='  转录与说话人  ')
-        ttk.Label(page, text='新的会议录音', style='Title.TLabel').pack(anchor='w')
         title_row = ttk.Frame(page)
-        title_row.pack(fill='x', pady=(16, 14))
+        title_row.pack(fill='x', pady=(0, 4))
         ttk.Label(title_row, text='主题', width=9).pack(side='left')
         ttk.Entry(title_row, textvariable=self.filename_var).pack(side='left', fill='x', expand=True)
         self.filename_var.trace_add('write', lambda *_: self._update_preview())
@@ -136,7 +142,7 @@ class AudioRecorderApp:
             variable=self.room_mode_var, command=self._on_room_mode_change)
         self.room_mode_check.pack(anchor='w')
         self.mode_hint = ttk.Label(page, text='', style='Muted.TLabel', wraplength=780)
-        self.mode_hint.pack(anchor='w', pady=(6, 16))
+        self.mode_hint.pack(anchor='w', pady=(2, 4))
         devices = ttk.Frame(page)
         devices.pack(fill='x')
         self._loopback_display_names = ['(不录制)'] + [f'{d.name} [{d.sample_rate}Hz]' for d in self.loopback_devices]
@@ -152,7 +158,7 @@ class AudioRecorderApp:
         self.mic_meter = LevelMeter(mic_row, width=100, height=18)
         self.mic_meter.pack(side='left')
         gain_row = ttk.Frame(devices)
-        gain_row.pack(fill='x', pady=(8, 12))
+        gain_row.pack(fill='x', pady=(2, 4))
         ttk.Label(gain_row, text='录制音量', width=9).pack(side='left')
         ttk.Scale(gain_row, from_=0, to=100, variable=self.mic_vol_var,
             command=self._on_mic_vol_change, length=170).pack(side='left')
@@ -161,7 +167,7 @@ class AudioRecorderApp:
         self.test_btn = ttk.Button(gain_row, text='检查输入', command=self._on_test)
         self.test_btn.pack(side='right')
         self._system_row = ttk.Frame(devices)
-        self._system_row.pack(fill='x', pady=(0, 12))
+        self._system_row.pack(fill='x', pady=(0, 8))
         ttk.Label(self._system_row, text='系统声音', width=9).grid(row=0, column=0, sticky='w')
         self.loopback_combo = ttk.Combobox(self._system_row, textvariable=self.loopback_var,
             values=self._loopback_display_names, state='readonly', width=45)
@@ -177,33 +183,47 @@ class AudioRecorderApp:
         self._system_row.columnconfigure(1, weight=1)
         self._on_mic_vol_change(None)
         self._on_loopback_vol_change(None)
+        screen_row = ttk.Frame(page)
+        screen_row.pack(fill='x', pady=(4, 0))
+        self.screen_check = ttk.Checkbutton(screen_row, text='Teams 截图 · 3 秒/张', variable=self.screenshots_var)
+        self.screen_check.pack(side='left')
+        self.screen_combo = ttk.Combobox(screen_row, textvariable=self.screen_window_var, state='readonly', width=35)
+        self.screen_combo.pack(side='left', fill='x', expand=True, padx=8)
+        self.screen_combo.bind('<<ComboboxSelected>>', lambda _: self.screenshots_var.set(True))
+        self.screen_refresh = ttk.Button(screen_row, text='刷新窗口', command=self._refresh_windows)
+        self.screen_refresh.pack(side='right')
+        ttk.Label(page, textvariable=self.screen_status_var, style='Muted.TLabel').pack(anchor='w', pady=(2, 0))
         center = ttk.Frame(page)
-        center.pack(fill='both', expand=True, pady=(14, 8))
-        self._timer_label = ttk.Label(center, textvariable=self.time_var, style='Timer.TLabel')
-        self._timer_label.pack(pady=(0, 4))
-        self.waveform = WaveformCanvas(center, height=64)
-        self.waveform.pack(fill='x', pady=8)
+        center.pack(fill='x', pady=(4, 2))
+        self._timer_label = ttk.Label(center, textvariable=self.time_var, font=('Consolas', 22))
+        self._timer_label.pack(side='left')
         controls = ttk.Frame(center)
-        controls.pack(pady=10)
-        self.rec_btn = ttk.Button(controls, text='开始录音', style='Accent.TButton', command=self._on_rec, width=14)
+        controls.pack(side='right', pady=6)
+        self.rec_btn = ttk.Button(controls, text='开始录音', style='Accent.TButton', command=self._on_rec, width=10)
         self.rec_btn.pack(side='left', padx=5)
-        self.pause_btn = ttk.Button(controls, text='暂停', command=self._on_pause, width=9, state='disabled')
+        self.pause_btn = ttk.Button(controls, text='暂停', command=self._on_pause, width=6, state='disabled')
         self.pause_btn.pack(side='left', padx=5)
-        self.stop_btn = ttk.Button(controls, text='停止保存', command=self._on_stop, width=11, state='disabled')
+        self.stop_btn = ttk.Button(controls, text='停止保存', command=self._on_stop, width=9, state='disabled')
         self.stop_btn.pack(side='left', padx=5)
         self.mini_btn = ttk.Button(controls, text='Mini', command=self._toggle_mini_mode, width=6, state='disabled')
         self.mini_btn.pack(side='left', padx=5)
-        ttk.Label(center, textvariable=self.status_var, style='Muted.TLabel').pack(pady=4)
-        ttk.Separator(page).pack(fill='x', pady=12)
-        folder = ttk.Frame(page)
+        self.mark_btn = ttk.Button(controls, text='打标 Alt+M', command=self._add_marker, state='disabled')
+        self.mark_btn.pack(side='left', padx=5)
+        ttk.Label(page, text='Alt+R 开始 / 停止   ·   Alt+M 打标   ·   关闭窗口后驻留托盘', style='Muted.TLabel').pack(anchor='w')
+        ttk.Label(page, textvariable=self.status_var, style='Muted.TLabel').pack(anchor='w', pady=4)
+        footer = ttk.Frame(page)
+        footer.pack(fill='x')
+        ttk.Separator(footer).pack(fill='x', pady=4)
+        folder = ttk.Frame(footer)
         folder.pack(fill='x')
         ttk.Label(folder, text='保存到', width=9).pack(side='left')
         ttk.Entry(folder, textvariable=self.output_folder_var).pack(side='left', fill='x', expand=True, padx=(0, 10))
         ttk.Button(folder, text='选择', command=self._browse_folder).pack(side='right')
-        actions = ttk.Frame(page)
-        actions.pack(fill='x', pady=(12, 0))
+        actions = ttk.Frame(footer)
+        actions.pack(fill='x', pady=(8, 0))
         ttk.Button(actions, text='打开最近录音', command=self._open_recordings).pack(side='left')
         ttk.Button(actions, text='复制交接说明', command=self._copy_handoff).pack(side='left', padx=8)
+        ttk.Button(actions, text='回看画面与标记', command=self._open_review).pack(side='left')
         ttk.Button(actions, text='查看文字 →', command=lambda: self.tabs.select(self.result_panel)).pack(side='right')
 
     def _restore_device_selection(self) -> None:
@@ -266,7 +286,7 @@ class AudioRecorderApp:
         if room:
             self._system_row.pack_forget()
         else:
-            self._system_row.pack(fill='x', pady=(0, 12))
+            self._system_row.pack(fill='x', pady=(0, 8))
         self.mode_hint.configure(text=(
             '录会议室里的声音；不播放音频，不改变 Teams 静音或 No audio 设置。' if room else
             '录系统输出或虚拟声卡输入，加上实际麦克风；不回放声音。'))
@@ -387,11 +407,11 @@ class AudioRecorderApp:
 
         # Restore size
         self.root.resizable(True, True)
-        self.root.minsize(820, 660)
+        self.root.minsize(820, 640)
         if self._normal_geometry:
             self.root.geometry(self._normal_geometry)
         else:
-            self.root.geometry("940x760")
+            self.root.geometry("940x670")
 
     def _on_test(self) -> None:
         """Start/stop device test."""
@@ -411,15 +431,34 @@ class AudioRecorderApp:
 
     def _on_rec(self) -> None:
         """Start recording."""
+        if self.controller.state not in (RecordingState.IDLE, RecordingState.MONITORING):
+            return
         if self.result_panel.busy:
             messagebox.showinfo('正在处理文字', '请等转录完成或取消后再开始录音。')
             return
         self.controller.set_output_folder(self.output_folder_var.get())
         self.controller.set_filename_prefix(self.filename_var.get())
+        self.controller.screen_target = None
+        if self.screenshots_var.get():
+            index = self.screen_combo.current()
+            if index < 0 or index >= len(self._screen_windows):
+                self._show_window()
+                messagebox.showinfo('选择会议窗口', '请先刷新并选择要截图的 Teams 会议窗口。')
+                return
+            target = self._screen_windows[index]
+            reason = window_status(target)
+            if reason:
+                self._show_window()
+                messagebox.showinfo('会议窗口不可用', reason + '，请恢复会议窗口后重试。')
+                return
+            self.controller.screen_target = target
 
         if self.controller.start_recording():
             self.test_btn.configure(text="检查输入", state=tk.DISABLED)
             self.status_var.set("录音中…")
+            self._save_config()
+            if self.desktop:
+                self.desktop.notify('录音已开始 · Alt+M 打标，Alt+R 停止')
 
     def _on_pause(self) -> None:
         """Pause or resume recording."""
@@ -452,10 +491,20 @@ class AudioRecorderApp:
 
     def _update_ui_state(self, state: RecordingState) -> None:
         """Update UI based on state."""
+        idle = state == RecordingState.IDLE
+        self.screen_check.configure(state='normal' if idle else 'disabled')
+        self.screen_combo.configure(state='readonly' if idle else 'disabled')
+        self.screen_refresh.configure(state='normal' if idle else 'disabled')
+        self.mark_btn.configure(state='normal' if state in (RecordingState.RECORDING, RecordingState.PAUSED) else 'disabled')
+        if self.desktop:
+            self.desktop.update({RecordingState.IDLE: '就绪', RecordingState.RECORDING: '录音中',
+                RecordingState.PAUSED: '已暂停', RecordingState.MONITORING: '检查输入',
+                RecordingState.CONVERTING: '保存中'}[state])
         self.room_mode_check.configure(state=tk.NORMAL if state == RecordingState.IDLE else tk.DISABLED)
         self.mic_combo.configure(state='readonly' if state == RecordingState.IDLE else 'disabled')
         self.loopback_combo.configure(state='readonly' if state == RecordingState.IDLE and not self.room_mode_var.get() else 'disabled')
         if state == RecordingState.IDLE:
+            self.screen_status_var.set('只截所选窗口；最小化时暂停截图，录音继续')
             self._overlay.hide()
             self.rec_btn.configure(state=tk.NORMAL, text="  开始录音")
             self.pause_btn.configure(state=tk.DISABLED, text="  暂停")
@@ -463,7 +512,6 @@ class AudioRecorderApp:
             self.test_btn.configure(state=tk.NORMAL, text="检查输入")
             self.mini_btn.configure(state=tk.DISABLED)
             self.status_var.set("就绪")
-            self.waveform.clear()
             self.loopback_meter.clear()
             self.mic_meter.clear()
             self.time_var.set("00:00:00")
@@ -517,11 +565,14 @@ class AudioRecorderApp:
         minutes = int((elapsed % 3600) // 60)
         seconds = int(elapsed % 60)
         self.time_var.set(f"{hours:02d}:{minutes:02d}:{seconds:02d}")
+        screens = self.controller.screens
+        if screens:
+            self.screen_status_var.set('录音与截图已暂停' if self.controller.state == RecordingState.PAUSED
+                                       else screens.poll_status())
 
     def _on_audio_chunk(self, chunk: np.ndarray | None) -> None:
         """Callback for audio chunk (during recording)."""
         def update():
-            self.waveform.update_waveform(chunk)
             if hasattr(self, '_mini_waveform'):
                 self._mini_waveform.update_waveform(chunk)
         self._post(update)
@@ -536,7 +587,14 @@ class AudioRecorderApp:
 
     def _on_error(self, message: str) -> None:
         """Callback for errors."""
-        self._post(lambda: messagebox.showerror("Error", message))
+        self._post(lambda: self._report_error(message))
+
+    def _report_error(self, message):
+        self.status_var.set(message)
+        if self.desktop and self.root.state() == 'withdrawn':
+            self.desktop.notify(message)
+        else:
+            messagebox.showerror('WaveGrab', message)
 
     def _on_conversion_complete(self, path: Path) -> None:
         """Callback for conversion complete."""
@@ -550,10 +608,13 @@ class AudioRecorderApp:
         self._save_config()
         self.status_var.set(f"已保存：{path.name}")
         self._toast.show("录音已保存，可复制交接说明", duration=3500)
+        if self.desktop:
+            self.desktop.notify('录音已保存 · 托盘菜单可回看画面与标记')
 
     def _save_config(self) -> None:
         """Save current configuration."""
         self.config.room_mode = self.room_mode_var.get()
+        self.config.screenshots_enabled = self.screenshots_var.get()
         display_loopback = self.loopback_var.get()
         display_mic = self.mic_var.get()
 
@@ -614,7 +675,55 @@ class AudioRecorderApp:
         self.root.clipboard_append(clipboard_prompt(folder))
         self._toast.show("已复制，可粘贴给 Codex、agy 或其他工具")
 
+    def _refresh_windows(self):
+        if self.controller.state != RecordingState.IDLE:
+            return
+        self._screen_windows = teams_windows()
+        self.screen_combo.configure(values=[w.title for w in self._screen_windows])
+        self.screen_window_var.set('请选择 Teams 会议窗口' if self._screen_windows else '没有找到 Teams 窗口')
+
+    def _toggle_recording(self):
+        if self.controller.is_recording:
+            self._on_stop()
+        elif self.controller.state == RecordingState.IDLE:
+            self._on_rec()
+
+    def _add_marker(self):
+        try:
+            marker = self.controller.add_marker()
+            if marker:
+                text = f"{marker['label']} · {int(marker['seconds']) // 60:02d}:{int(marker['seconds']) % 60:02d}"
+                self.status_var.set(text)
+                if self.desktop:
+                    self.desktop.notify(text)
+            else:
+                self.status_var.set('录音开始后可打标')
+        except OSError as exc:
+            self._report_error(f'标记未保存：{exc}')
+
+    def _open_review(self):
+        folder = self.result_panel.folder or self._latest_folder()
+        if folder and (folder / 'review.html').is_file():
+            os.startfile(folder / 'review.html')
+        else:
+            self._report_error('请先停止保存一段新版录音，再打开回看页。')
+
+    def _show_window(self):
+        self.root.deiconify()
+        self.root.lift()
+
+    def _hide_window(self):
+        if self.desktop and self.desktop.ready.is_set():
+            self._save_config()
+            self.root.withdraw()
+
     def _on_close(self):
+        if self.desktop and self.desktop.ready.is_set():
+            self._hide_window()
+        else:
+            self._exit()
+
+    def _exit(self):
         if self._closing:
             return
         if self.result_panel.busy:
@@ -630,9 +739,18 @@ class AudioRecorderApp:
         self._save_config()
         def close():
             self.controller.cleanup()
+            if self.desktop:
+                self.desktop.stop()
             self._post(self.root.destroy)
         threading.Thread(target=close, daemon=True).start()
 
     def run(self) -> None:
         """Start application."""
+        from desktop import DesktopControls
+        self.desktop = DesktopControls(self._post, self._show_window, self._toggle_recording,
+            self._add_marker, self._open_review, self._exit, self._report_error)
+        if self.desktop.start():
+            self.root.withdraw()
+            self.desktop.notify('已在托盘就绪 · 右键设置，Alt+R 开始/停止，Alt+M 打标')
+        self._refresh_windows()
         self.root.mainloop()
