@@ -85,8 +85,9 @@ class VisualTests(unittest.TestCase):
 
     def test_recording_lifecycle_markers_follow_pause_clock(self):
         from devices import AudioDevice
-        from gui.controller import RecordingController
-        controller = RecordingController()
+        from gui.controller import RecordingController, RecordingCallbacks
+        finished = threading.Event()
+        controller = RecordingController(RecordingCallbacks(on_visuals_complete=lambda _: finished.set()))
         controller.set_output_folder(self.folder)
         controller.set_mic_device(AudioDevice(1, 'fake', 1, 48000, False))
         recorder = Mock(error='')
@@ -102,17 +103,19 @@ class VisualTests(unittest.TestCase):
             controller.resume_recording()
             controller.stop_recording()
         self.assertIsNone(controller.add_marker())
+        self.assertTrue(finished.wait(2))
         self.assertTrue((controller.last_session / 'review.html').exists())
         session = json.loads((controller.last_session / 'session.json').read_text(encoding='utf-8'))
         self.assertIn('timeline.jsonl', session['visual_files'])
 
     def test_stalled_capture_shutdown_cannot_hold_audio_open(self):
-        from gui.controller import RecordingController, RecordingState
+        from gui.controller import RecordingController, RecordingState, RecordingCallbacks
+        finished = threading.Event()
         release = threading.Event()
         screen = WindowSnapshots(WindowTarget(123, 1, 'meeting'), self.timeline, lambda: True, Mock())
         screen.control = Mock()
         screen.control.stop.side_effect = lambda: release.wait(2)
-        controller = RecordingController()
+        controller = RecordingController(RecordingCallbacks(on_visuals_complete=lambda _: finished.set()))
         controller._state = RecordingState.RECORDING
         controller._recorder = Mock(error='')
         controller._recorder.missing_source_error.return_value = ''
@@ -128,12 +131,74 @@ class VisualTests(unittest.TestCase):
         try:
             with patch.object(WindowSnapshots, 'STOP_TIMEOUT', .02):
                 controller.stop_recording()
+                self.assertTrue(finished.wait(2))
             self.assertEqual(controller.state, RecordingState.IDLE)
             self.assertTrue(screen._stopped)
             self.assertTrue((self.folder / 'review.html').exists())
             self.assertIn('退出超时', (self.folder / 'timeline.jsonl').read_text(encoding='utf-8'))
         finally:
             release.set()
+
+    def test_review_processing_does_not_block_next_recording_or_share_clock(self):
+        from devices import AudioDevice
+        from gui.controller import RecordingController, RecordingCallbacks, RecordingState
+        started, release, finished = threading.Event(), threading.Event(), threading.Event()
+        results = []
+        def complete(result):
+            results.append(result)
+            finished.set()
+        controller = RecordingController(RecordingCallbacks(on_visuals_complete=complete))
+        controller.set_output_folder(self.folder)
+        controller.set_mic_device(AudioDevice(1, 'fake', 1, 48000, False))
+        def recorder(*_):
+            fake = Mock(error='')
+            fake.get_mixed_chunk.side_effect = lambda **_: (time.sleep(.01) or None)
+            fake.missing_source_error.return_value = ''
+            return fake
+        with patch.object(controller, '_make_recorder', side_effect=recorder):
+            controller.start_recording()
+            old_folder, old_timeline = controller.last_session, controller.timeline
+            finish = old_timeline.finish
+            def delayed_finish():
+                started.set()
+                release.wait(3)
+                finish()
+            try:
+                with patch.object(old_timeline, 'finish', side_effect=delayed_finish):
+                    controller.stop_recording()
+                    self.assertTrue(started.wait(1))
+                    self.assertFalse(finished.is_set())
+                    self.assertEqual(controller.state, RecordingState.IDLE)
+                    self.assertEqual(json.loads((old_folder / 'session.json').read_text(encoding='utf-8'))['status'], 'complete')
+                    frozen = old_timeline.clock()
+                    self.assertTrue(controller.start_recording())
+                    self.assertNotEqual(controller.last_session, old_folder)
+                    self.assertEqual(old_timeline.clock(), frozen)
+                    release.set()
+                    self.assertTrue(finished.wait(2))
+                    self.assertEqual(controller.state, RecordingState.RECORDING)
+                    self.assertEqual(results[0][0], old_folder)
+            finally:
+                release.set()
+                finished.clear()
+                controller.stop_recording()
+                finished.wait(2)
+
+    def test_late_capture_start_is_stopped_without_delaying_recording(self):
+        started, release = threading.Event(), threading.Event()
+        screen = WindowSnapshots(WindowTarget(123, 1, 'meeting'), self.timeline, lambda: True, Mock())
+        control = Mock()
+        def delayed_start():
+            started.set()
+            release.wait(2)
+            screen.control = control
+        with patch.object(screen, 'start', side_effect=delayed_start):
+            screen.start_background()
+            self.assertTrue(started.wait(1))
+            screen.deactivate()
+            release.set()
+            self.assertTrue(screen._start_done.wait(2))
+            control.stop.assert_called_once()
 
     def test_hotkeys_use_alt_and_unregister(self):
         from desktop import DesktopControls
@@ -150,6 +215,39 @@ class VisualTests(unittest.TestCase):
         self.assertEqual([c.args for c in api.user32.RegisterHotKey.call_args_list],
                          [(None, 1, 0x4001, ord('R')), (None, 2, 0x4001, ord('M'))])
         self.assertEqual(api.user32.UnregisterHotKey.call_count, 2)
+
+    def test_recording_and_transcription_can_run_for_different_sessions(self):
+        from config import AppConfig
+        from gui.app import AudioRecorderApp
+        next_folder = self.folder / 'next'
+        next_folder.mkdir()
+        (self.folder / 'mixed.flac').write_bytes(b'fixture')
+        runtime = self.folder / 'dist/.runtime/Scripts/python.exe'
+        runtime.parent.mkdir(parents=True)
+        runtime.touch()
+        with patch('gui.app.get_devices', return_value=[]), patch('gui.app.load_config', return_value=AppConfig()):
+            app = AudioRecorderApp()
+        try:
+            panel = app.result_panel
+            panel.set_folder(self.folder)
+            panel.busy = True
+            with patch.object(app.controller, 'start_recording', return_value=True) as start, patch.object(app, '_save_config'):
+                app._on_rec()
+                start.assert_called_once()
+                app._show_completion(next_folder)
+                self.assertEqual(panel.folder, self.folder.resolve())
+            panel.busy = False
+            panel.active_recording_folder = lambda: next_folder
+            with patch('gui.transcripts.get_exe_dir', return_value=self.folder), patch('gui.transcripts.threading.Thread') as worker:
+                panel.start()
+                worker.return_value.start.assert_called_once()
+                panel.busy = False
+                panel.active_recording_folder = lambda: self.folder
+                panel.start()
+                self.assertIn('仍在录制', panel.status.get())
+                worker.return_value.start.assert_called_once()
+        finally:
+            app.root.destroy()
 
     def test_status_and_markers_use_tooltip_without_notifications(self):
         from desktop import DesktopControls

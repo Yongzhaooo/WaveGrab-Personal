@@ -21,7 +21,7 @@ class RecordingState(Enum):
     MONITORING = auto()
     RECORDING = auto()
     PAUSED = auto()
-    CONVERTING = auto()
+    SAVING = auto()
 
 
 @dataclass
@@ -32,7 +32,8 @@ class RecordingCallbacks:
     on_loopback_level: Callable | None = None
     on_mic_level: Callable | None = None
     on_error: Callable | None = None
-    on_conversion_complete: Callable | None = None
+    on_recording_saved: Callable | None = None
+    on_visuals_complete: Callable | None = None
 
 
 class RecordingController:
@@ -180,10 +181,10 @@ class RecordingController:
             try:
                 self.timeline = VisualTimeline(folder, lambda: self.elapsed_time)
                 if self.screen_target:
-                    self.screens = WindowSnapshots(self.screen_target, self.timeline,
-                        lambda: self._state == RecordingState.RECORDING,
+                    timeline = self.timeline
+                    self.screens = WindowSnapshots(self.screen_target, timeline,
+                        lambda: self.timeline is timeline and self._state == RecordingState.RECORDING,
                         lambda message: self._notify('on_error', message))
-                    self.screens.start()
             except Exception as exc:
                 message = f'画面或标记不可用，录音继续：{exc}'
                 if self.screens:
@@ -194,7 +195,10 @@ class RecordingController:
                     except OSError:
                         pass
                 self._notify('on_error', message)
+        screens = self.screens
         self._record_thread.start()
+        if screens:
+            screens.start_background()
         return True
 
     def pause_recording(self):
@@ -219,11 +223,16 @@ class RecordingController:
 
     def stop_recording(self):
         with self._stop_lock:
-            if self._state in (RecordingState.IDLE, RecordingState.CONVERTING):
+            if self._state in (RecordingState.IDLE, RecordingState.SAVING):
                 return
             monitor = self._state == RecordingState.MONITORING
             duration = self.elapsed_time
-            self._set_state(RecordingState.CONVERTING)
+            folder, screens, timeline = self.last_session, self.screens, self.timeline
+            self._set_state(RecordingState.SAVING)
+            if screens:
+                screens.deactivate()
+            if timeline:
+                timeline.freeze_clock(duration)
             try:
                 if self._recorder:
                     self._recorder.stop()
@@ -236,19 +245,6 @@ class RecordingController:
                 if self._writer:
                     duration = self._writer.duration_seconds
                     self._writer.stop()
-                if self.screens:
-                    try:
-                        self.screens.stop()
-                    except Exception as exc:
-                        message = f'停止截图时出错：{exc}'
-                        self._notify('on_error', message)
-                        if self.timeline:
-                            self.timeline.note(message)
-                if self.timeline:
-                    try:
-                        self.timeline.finish()
-                    except Exception as exc:
-                        self._notify('on_error', f'回看页未生成，原录音与时间轴保留：{exc}')
                 if not monitor and self.last_session:
                     write_handoff(self.last_session, self._session_title,
                                   self._session_devices, duration,
@@ -261,8 +257,28 @@ class RecordingController:
                 self._set_state(RecordingState.IDLE)
             if self._error:
                 self._notify('on_error', '录音已停止，已录文件保留：' + self._error)
-            if not monitor and self.last_session:
-                self._notify('on_conversion_complete', self.last_session)
+            if not monitor and folder:
+                self._notify('on_recording_saved', folder)
+            if timeline:
+                threading.Thread(target=self._finish_visuals, args=(folder, screens, timeline), daemon=True).start()
+
+    def _finish_visuals(self, folder, screens, timeline):
+        errors = []
+        if screens:
+            try:
+                screens.finish_background_start()
+                screens.stop()
+            except Exception as exc:
+                errors.append(str(exc))
+                try:
+                    timeline.note(str(exc))
+                except OSError:
+                    pass
+        try:
+            timeline.finish()
+        except Exception as exc:
+            errors.append(f'回看页未生成，原录音与时间轴保留：{exc}')
+        self._notify('on_visuals_complete', (folder, '；'.join(errors)))
 
     def _record_loop(self):
         last_update = 0.0

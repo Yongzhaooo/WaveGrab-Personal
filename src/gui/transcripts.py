@@ -17,9 +17,9 @@ from transcript_store import (RAW, default_name, edit_segment, export_result, in
 
 
 class TranscriptPanel(ttk.Frame):
-    def __init__(self, parent, post, recording_idle):
+    def __init__(self, parent, post, active_recording_folder):
         super().__init__(parent, padding=20)
-        self.post, self.recording_idle = post, recording_idle
+        self.post, self.active_recording_folder = post, active_recording_folder
         self.folder = None
         self.data, self.names, self.edits = None, {}, {}
         self._speaker_lookup = {}
@@ -207,8 +207,9 @@ class TranscriptPanel(ttk.Frame):
     def start(self):
         if self.busy or not self.folder:
             return
-        if not self.recording_idle():
-            self.status.set('请先停止录音或输入检查，再处理文字。')
+        active = self.active_recording_folder()
+        if active and self.folder.resolve() == Path(active).resolve():
+            self.status.set('这一场仍在录制，请先保存；可以处理其他已保存的录音。')
             return
         home = get_exe_dir() if is_frozen() else get_exe_dir() / 'dist'
         python = home / '.runtime' / 'Scripts' / 'python.exe'
@@ -256,7 +257,8 @@ class TranscriptPanel(ttk.Frame):
                             ctypes.windll.kernel32.SetDllDirectoryW(None)
                         self.process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             text=True, encoding='utf-8', errors='replace', env=env,
-                            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+                            creationflags=(subprocess.CREATE_NO_WINDOW | subprocess.BELOW_NORMAL_PRIORITY_CLASS)
+                            if os.name == 'nt' else 0)
                     finally:
                         if is_frozen() and os.name == 'nt':
                             ctypes.windll.kernel32.SetDllDirectoryW(str(get_base_path()))

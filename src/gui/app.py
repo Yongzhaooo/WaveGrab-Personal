@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 import os
 import queue
+import json
 from handoff import clipboard_prompt
 
 import numpy as np
@@ -16,7 +17,7 @@ sys.path.insert(0, str(get_src_path()))
 
 from devices import AudioDevice, get_devices, get_default_devices, get_system_sources
 from config import AppConfig, load_config, save_config
-from visuals import teams_windows, window_status
+from visuals import teams_windows, window_status, write_review
 from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, COLORS, apply_light_theme
 from .transcripts import TranscriptPanel
 from .controller import RecordingController, RecordingCallbacks, RecordingState
@@ -61,7 +62,8 @@ class AudioRecorderApp:
             on_loopback_level=self._on_loopback_level,
             on_mic_level=self._on_mic_level,
             on_error=self._on_error,
-            on_conversion_complete=self._on_conversion_complete
+            on_recording_saved=self._on_recording_saved,
+            on_visuals_complete=self._on_visuals_complete
         ))
 
         # UI variables
@@ -131,7 +133,8 @@ class AudioRecorderApp:
         page = ttk.Frame(self.tabs, padding=10)
         self.tabs.add(page, text='  录音  ')
         self.result_panel = TranscriptPanel(self.tabs, self._post,
-            lambda: self.controller.state == RecordingState.IDLE)
+            lambda: self.controller.last_session if self.controller.state in (
+                RecordingState.RECORDING, RecordingState.PAUSED, RecordingState.SAVING) else None)
         self.tabs.add(self.result_panel, text='  转录与说话人  ')
         title_row = ttk.Frame(page)
         title_row.pack(fill='x', pady=(0, 4))
@@ -415,9 +418,6 @@ class AudioRecorderApp:
 
     def _on_test(self) -> None:
         """Start/stop device test."""
-        if self.result_panel.busy:
-            self._report_error('请先完成或取消转录。')
-            return
         if self.controller.state == RecordingState.MONITORING:
             self.controller.stop_monitoring()
             self.test_btn.configure(text="检查输入")
@@ -432,9 +432,6 @@ class AudioRecorderApp:
     def _on_rec(self) -> None:
         """Start recording."""
         if self.controller.state not in (RecordingState.IDLE, RecordingState.MONITORING):
-            return
-        if self.result_panel.busy:
-            self._report_error('请等转录完成或取消后再开始录音。')
             return
         self.controller.set_output_folder(self.output_folder_var.get())
         self.controller.set_filename_prefix(self.filename_var.get())
@@ -498,7 +495,7 @@ class AudioRecorderApp:
         if self.desktop:
             self.desktop.update({RecordingState.IDLE: '就绪', RecordingState.RECORDING: '录音中',
                 RecordingState.PAUSED: '已暂停', RecordingState.MONITORING: '检查输入',
-                RecordingState.CONVERTING: '保存中'}[state])
+                RecordingState.SAVING: '保存中'}[state])
         self.room_mode_check.configure(state=tk.NORMAL if state == RecordingState.IDLE else tk.DISABLED)
         self.mic_combo.configure(state='readonly' if state == RecordingState.IDLE else 'disabled')
         self.loopback_combo.configure(state='readonly' if state == RecordingState.IDLE and not self.room_mode_var.get() else 'disabled')
@@ -546,7 +543,7 @@ class AudioRecorderApp:
             if hasattr(self, '_mini_pause_btn'):
                 self._mini_pause_btn.configure(text="▶")
 
-        elif state == RecordingState.CONVERTING:
+        elif state == RecordingState.SAVING:
             self.rec_btn.configure(state=tk.DISABLED)
             self.pause_btn.configure(state=tk.DISABLED)
             self.stop_btn.configure(state=tk.DISABLED)
@@ -594,14 +591,25 @@ class AudioRecorderApp:
         if self.desktop:
             self.desktop.set_detail(message, error=True)
 
-    def _on_conversion_complete(self, path: Path) -> None:
-        """Callback for conversion complete."""
+    def _on_recording_saved(self, path: Path) -> None:
+        """Audio is closed and available independently of optional processing."""
         self._post(lambda: self._show_completion(path))
+
+    def _on_visuals_complete(self, result):
+        path, error = result
+        def update():
+            if self.controller.state != RecordingState.IDLE or self._latest_folder() != path:
+                return
+            if error:
+                self._report_error(f'{path.name}：{error}')
+            elif not self._last_error:
+                self.status_var.set(f'录音已保存，回看页已就绪：{path.name}')
+        self._post(update)
 
     def _show_completion(self, path: Path) -> None:
         """Show completion message."""
-        self.result_panel.set_folder(path)
-        self.tabs.select(self.result_panel)
+        if not self.result_panel.busy:
+            self.result_panel.set_folder(path)
         self.config.last_session = str(path)
         self._save_config()
         if self._last_error:
@@ -609,7 +617,7 @@ class AudioRecorderApp:
         else:
             self.status_var.set(f"已保存：{path.name}")
         if self.desktop and not self._last_error:
-            self.desktop.set_detail('录音已保存 · 可回看画面与标记')
+            self.desktop.set_detail('录音已保存 · 回看页在后台准备')
 
     def _save_config(self) -> None:
         """Save current configuration."""
@@ -664,7 +672,7 @@ class AudioRecorderApp:
             self._on_error(str(exc))
 
     def _copy_handoff(self):
-        if self.controller.is_recording or self.controller.state == RecordingState.CONVERTING:
+        if self.controller.is_recording or self.controller.state == RecordingState.SAVING:
             self.status_var.set('请先停止并保存录音')
             return
         folder = self._latest_folder()
@@ -705,6 +713,23 @@ class AudioRecorderApp:
         folder = self.result_panel.folder or self._latest_folder()
         if folder and (folder / 'review.html').is_file():
             os.startfile(folder / 'review.html')
+        elif folder and (folder / 'timeline.jsonl').is_file():
+            metadata = folder / 'session.json'
+            try:
+                if not metadata.exists() or json.loads(metadata.read_text(encoding='utf-8')).get('status') == 'recording':
+                    self._report_error('这一场仍在录制，请先停止保存。')
+                    return
+            except (OSError, ValueError) as exc:
+                self._report_error(str(exc))
+                return
+            self.status_var.set('正在后台生成回看页；可以继续录音')
+            def prepare():
+                try:
+                    write_review(folder)
+                    self._post(lambda: os.startfile(folder / 'review.html'))
+                except Exception as exc:
+                    self._on_error(f'回看页未生成：{exc}')
+            threading.Thread(target=prepare, daemon=True).start()
         else:
             self._report_error('请先停止保存一段新版录音，再打开回看页。')
 
@@ -728,11 +753,6 @@ class AudioRecorderApp:
             return
         if self.result_panel.busy:
             self.result_panel.cancel()
-            self.status_var.set('正在取消转录，请稍后退出')
-            return
-        if self.controller.state == RecordingState.CONVERTING:
-            self.status_var.set('正在保存，请稍后退出')
-            return
         self._closing = True
         self._save_config()
         def close():

@@ -4,7 +4,9 @@ from ctypes import wintypes
 from dataclasses import dataclass
 import io
 import json
+import os
 from pathlib import Path
+import tempfile
 import threading
 import time
 
@@ -73,6 +75,9 @@ class VisualTimeline:
         self._last_jpeg = None
         self._events = (self.folder / 'timeline.jsonl').open('x', encoding='utf-8')
 
+    def freeze_clock(self, seconds):
+        self.clock = lambda: seconds
+
     def _append(self, kind, **fields):
         event = {'type': kind, 'seconds': round(self.clock(), 3), **fields}
         self._events.write(json.dumps(event, ensure_ascii=False) + '\n')
@@ -129,6 +134,28 @@ class WindowSnapshots:
         self.status = '等待窗口画面'
         self.failure = ''
         self._last_reason = ''
+        self._start_done = threading.Event()
+        self._start_done.set()
+
+    def start_background(self):
+        self._start_done.clear()
+        def start():
+            try:
+                if not self._stopped:
+                    self.start()
+                if self._stopped:
+                    self.stop()
+            except Exception as exc:
+                self.failure = f'截图未启动，录音继续：{exc}'
+                self.timeline.note(self.failure)
+                if not self._stopped:
+                    self.report(self.failure)
+            finally:
+                self._start_done.set()
+        threading.Thread(target=start, daemon=True).start()
+
+    def deactivate(self):
+        self._stopped = True
 
     def poll_status(self):
         reason = window_status(self.target)
@@ -202,6 +229,10 @@ class WindowSnapshots:
             if errors:
                 raise errors[0]
 
+    def finish_background_start(self):
+        if not self._start_done.wait(self.STOP_TIMEOUT):
+            raise RuntimeError('截图初始化未退出；录音已经保存')
+
 
 def write_review(folder):
     events = [json.loads(line) for line in (folder / 'timeline.jsonl').read_text(encoding='utf-8').splitlines()]
@@ -232,4 +263,15 @@ seek.max=Math.max(1,...events.map(e=>e.seconds));seek.oninput=()=>jump(Number(se
 audio.onloadedmetadata=()=>{if(Number.isFinite(audio.duration))seek.max=audio.duration};audio.ontimeupdate=()=>show(audio.currentTime);
 document.getElementById('notes').textContent=events.filter(e=>e.type==='status').map(e=>stamp(e.seconds)+' '+e.text).join(' / ');show(0);
 </script></html>'''
-    (folder / 'review.html').write_text(page.replace('__DATA__', data), encoding='utf-8')
+    with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=folder, suffix='.html.tmp', delete=False) as output:
+        temporary = Path(output.name)
+        try:
+            output.write(page.replace('__DATA__', data))
+        except Exception:
+            output.close()
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        os.replace(temporary, folder / 'review.html')
+    finally:
+        temporary.unlink(missing_ok=True)
