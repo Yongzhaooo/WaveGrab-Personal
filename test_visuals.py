@@ -106,6 +106,35 @@ class VisualTests(unittest.TestCase):
         session = json.loads((controller.last_session / 'session.json').read_text(encoding='utf-8'))
         self.assertIn('timeline.jsonl', session['visual_files'])
 
+    def test_stalled_capture_shutdown_cannot_hold_audio_open(self):
+        from gui.controller import RecordingController, RecordingState
+        release = threading.Event()
+        screen = WindowSnapshots(WindowTarget(123, 1, 'meeting'), self.timeline, lambda: True, Mock())
+        screen.control = Mock()
+        screen.control.stop.side_effect = lambda: release.wait(2)
+        controller = RecordingController()
+        controller._state = RecordingState.RECORDING
+        controller._recorder = Mock(error='')
+        controller._recorder.missing_source_error.return_value = ''
+        writer = Mock(duration_seconds=12)
+        controller._writer = writer
+        controller.timeline = self.timeline
+        controller.last_session = self.folder
+        controller.screens = screen
+        def stalled_stop():
+            writer.stop.assert_called_once()
+            release.wait(2)
+        screen.control.stop.side_effect = stalled_stop
+        try:
+            with patch.object(WindowSnapshots, 'STOP_TIMEOUT', .02):
+                controller.stop_recording()
+            self.assertEqual(controller.state, RecordingState.IDLE)
+            self.assertTrue(screen._stopped)
+            self.assertTrue((self.folder / 'review.html').exists())
+            self.assertIn('退出超时', (self.folder / 'timeline.jsonl').read_text(encoding='utf-8'))
+        finally:
+            release.set()
+
     def test_hotkeys_use_alt_and_unregister(self):
         from desktop import DesktopControls
         controls = DesktopControls.__new__(DesktopControls)

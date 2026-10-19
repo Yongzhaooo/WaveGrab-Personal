@@ -118,6 +118,8 @@ class VisualTimeline:
 
 
 class WindowSnapshots:
+    STOP_TIMEOUT = 3
+
     def __init__(self, target, timeline, active, report):
         self.target, self.timeline = target, timeline
         self.active, self.report = active, report
@@ -184,8 +186,21 @@ class WindowSnapshots:
     def stop(self):
         self._stopped = True
         if self.control:
-            self.control.stop()
-            self.control = None
+            control, self.control = self.control, None
+            done, errors = threading.Event(), []
+            def stop_native():
+                try:
+                    control.stop()
+                except Exception as exc:
+                    errors.append(exc)
+                finally:
+                    done.set()
+            # A native capture shutdown must never hold the audio files open.
+            threading.Thread(target=stop_native, daemon=True).start()
+            if not done.wait(self.STOP_TIMEOUT):
+                raise RuntimeError('截图组件退出超时；不再写入截图，音频已停止保存')
+            if errors:
+                raise errors[0]
 
 
 def write_review(folder):

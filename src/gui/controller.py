@@ -225,11 +225,6 @@ class RecordingController:
             duration = self.elapsed_time
             self._set_state(RecordingState.CONVERTING)
             try:
-                if self.screens:
-                    try:
-                        self.screens.stop()
-                    except Exception as exc:
-                        self._notify('on_error', f'停止截图时出错：{exc}')
                 if self._recorder:
                     self._recorder.stop()
                     self._error = self._error or self._recorder.error
@@ -241,6 +236,14 @@ class RecordingController:
                 if self._writer:
                     duration = self._writer.duration_seconds
                     self._writer.stop()
+                if self.screens:
+                    try:
+                        self.screens.stop()
+                    except Exception as exc:
+                        message = f'停止截图时出错：{exc}'
+                        self._notify('on_error', message)
+                        if self.timeline:
+                            self.timeline.note(message)
                 if self.timeline:
                     try:
                         self.timeline.finish()
