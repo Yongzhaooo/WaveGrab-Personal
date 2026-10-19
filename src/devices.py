@@ -39,9 +39,12 @@ def get_devices() -> list[AudioDevice]:
     return devices
 
 
-def get_loopback_devices() -> list[AudioDevice]:
-    """Return only loopback devices (system audio)."""
-    return [d for d in get_devices() if d.is_loopback]
+def get_system_sources(devices: list[AudioDevice] | None = None) -> list[AudioDevice]:
+    """Prefer VB-CABLE's receiving input over its duplicate loopback endpoints."""
+    devices = get_devices() if devices is None else devices
+    cable = [d for d in devices if not d.is_loopback and d.name.startswith('CABLE Output (VB-Audio Virtual Cable)')]
+    return cable + [d for d in devices if d.is_loopback and not
+                    (cable and 'VB-Audio Virtual Cable' in d.name)]
 
 
 def get_input_devices() -> list[AudioDevice]:
@@ -53,8 +56,8 @@ def list_devices() -> None:
     """Print all available devices."""
     devices = get_devices()
 
-    print("\n=== Loopback Devices (System Audio) ===")
-    loopback = [d for d in devices if d.is_loopback]
+    print("\n=== System Audio / Virtual Inputs ===")
+    loopback = get_system_sources(devices)
     if loopback:
         for d in loopback:
             print(f"  [{d.index}] {d.name}")

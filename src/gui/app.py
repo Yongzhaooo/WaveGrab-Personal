@@ -14,7 +14,7 @@ from paths import get_base_path, get_src_path
 import sys
 sys.path.insert(0, str(get_src_path()))
 
-from devices import AudioDevice, get_devices, get_default_devices
+from devices import AudioDevice, get_devices, get_default_devices, get_system_sources
 from config import AppConfig, load_config, save_config
 from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, ToastNotification, COLORS, apply_light_theme
 from .transcripts import TranscriptPanel
@@ -46,7 +46,7 @@ class AudioRecorderApp:
 
         # Load devices
         devices = get_devices()
-        self.loopback_devices = [d for d in devices if d.is_loopback]
+        self.loopback_devices = get_system_sources(devices)
         self.input_devices = [d for d in devices if not d.is_loopback]
 
         # Controller
@@ -269,7 +269,7 @@ class AudioRecorderApp:
             self._system_row.pack(fill='x', pady=(0, 12))
         self.mode_hint.configure(text=(
             '录会议室里的声音；不播放音频，不改变 Teams 静音或 No audio 设置。' if room else
-            '录所选系统声音与麦克风；不改变 Teams 设置。'))
+            '录系统输出或虚拟声卡输入，加上实际麦克风；不回放声音。'))
 
     def _browse_folder(self) -> None:
         """Open folder selection dialog."""

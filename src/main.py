@@ -5,7 +5,7 @@ import time
 import threading
 from pathlib import Path
 
-from devices import get_loopback_devices, get_input_devices, AudioDevice
+from devices import get_system_sources, get_input_devices, AudioDevice
 from recorder import Recorder, StreamConfig
 from writer import AudioWriter
 
@@ -53,7 +53,7 @@ def main() -> int:
     print("=" * 50)
 
     # Get devices
-    loopback_devices = get_loopback_devices()
+    loopback_devices = get_system_sources()
     input_devices = get_input_devices()
 
     # Select loopback

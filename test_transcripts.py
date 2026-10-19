@@ -100,6 +100,26 @@ class TranscriptTests(unittest.TestCase):
             finally:
                 app.root.destroy()
 
+    def test_virtual_cable_is_available_as_system_source(self):
+        from devices import AudioDevice, get_system_sources
+        from gui.controller import RecordingController, RecordingCallbacks
+        cable = AudioDevice(21, 'CABLE Output (VB-Audio Virtual Cable)', 2, 48000, False)
+        duplicate = AudioDevice(22, 'CABLE Input (VB-Audio Virtual Cable) [Loopback]', 2, 48000, True)
+        physical = AudioDevice(25, 'Speakers (Realtek) [Loopback]', 2, 48000, True)
+        mic = AudioDevice(20, 'Microphone Array', 2, 48000, False)
+        self.assertEqual(get_system_sources([mic, cable, duplicate, physical]), [cable, physical])
+        errors = []
+        controller = RecordingController(RecordingCallbacks(on_error=errors.append))
+        controller.set_room_mode(False)
+        controller.set_loopback_device(cable)
+        controller.set_mic_device(mic)
+        recorder = controller._make_recorder()
+        self.assertEqual(recorder.loopback_config.device_index, 21)
+        self.assertEqual(recorder.mic_config.device_index, 20)
+        controller.set_mic_device(cable)
+        self.assertFalse(controller.start_recording())
+        self.assertIn('同一设备', errors[0])
+
 
 if __name__ == '__main__':
     unittest.main()

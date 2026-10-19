@@ -130,6 +130,10 @@ class RecordingController:
         if self.room_mode and not self._mic_device:
             self._notify('on_error', '会议室模式需要选择一个麦克风。不会自动启用被系统禁用的设备。')
             return False
+        if (not self.room_mode and self._loopback_device and self._mic_device
+                and self._loopback_device.index == self._mic_device.index):
+            self._notify('on_error', '系统声音和麦克风选中了同一设备。请将麦克风选为实际麦克风，避免重复录制。')
+            return False
         if not self._loopback_device and not self._mic_device:
             self._notify('on_error', '请选择系统声音或麦克风设备。')
             return False
