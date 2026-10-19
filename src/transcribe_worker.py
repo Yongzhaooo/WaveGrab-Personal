@@ -1,0 +1,152 @@
+"""CPU-only offline inference. Run with the companion runtime, never the GUI interpreter."""
+import argparse
+from collections import defaultdict
+import json
+import os
+from pathlib import Path
+import tarfile
+import urllib.request
+
+SEGMENT_URL = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/'
+               'speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2')
+EMBED_URL = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/'
+             'speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx')
+
+
+def progress(message):
+    print(message, flush=True)
+
+
+def download(url, destination):
+    tmp = destination.with_suffix('.download')
+    with urllib.request.urlopen(url, timeout=60) as response, tmp.open('wb') as file:
+        while chunk := response.read(1024 * 1024):
+            file.write(chunk)
+    tmp.replace(destination)
+
+
+def prepare_models(folder):
+    folder.mkdir(parents=True, exist_ok=True)
+    segmentation = folder / 'segmentation.onnx'
+    embedding = folder / 'embedding.onnx'
+    if not segmentation.exists():
+        progress('下载说话人分段模型…')
+        archive = folder / 'segmentation.tar.bz2'
+        download(SEGMENT_URL, archive)
+        with tarfile.open(archive) as tar:
+            member = next(m for m in tar.getmembers() if m.name.endswith('/model.onnx') and m.isfile())
+            with tar.extractfile(member) as source, segmentation.with_suffix('.download').open('wb') as target:
+                while chunk := source.read(1024 * 1024):
+                    target.write(chunk)
+        segmentation.with_suffix('.download').replace(segmentation)
+        archive.unlink()
+    if not embedding.exists():
+        progress('下载声纹特征模型…')
+        download(EMBED_URL, embedding)
+    from huggingface_hub import snapshot_download
+    asr = folder / 'whisper-small'
+    if not (asr / 'model.bin').exists():
+        progress('下载多语言转录模型（仅首次，约 460 MB）…')
+        snapshot_download('Systran/faster-whisper-small', local_dir=asr,
+                          allow_patterns=['config.json', 'model.bin', 'tokenizer.json', 'vocabulary.*'],
+                          token=False)
+    return segmentation, embedding, asr
+
+
+def speaker_for_interval(start, end, turns):
+    scores = defaultdict(float)
+    active = []
+    for turn in turns:
+        overlap = min(end, turn['end']) - max(start, turn['start'])
+        if overlap > 0:
+            scores[turn['speaker']] += overlap
+            active.append(turn)
+    for i, a in enumerate(active):
+        for b in active[i + 1:]:
+            if a['speaker'] != b['speaker'] and min(end, a['end'], b['end']) - max(start, a['start'], b['start']) > .03:
+                return 'overlap'
+    return max(scores, key=scores.get) if scores else 'unknown'
+
+
+def align_words(words, turns):
+    # shortcut: scan turns per word; use an interval index if multi-hour meetings make this material.
+    mapping = {speaker: f'speaker_{i + 1}' for i, speaker in
+               enumerate(dict.fromkeys(t['speaker'] for t in sorted(turns, key=lambda x: x['start'])))}
+    output = []
+    for word in words:
+        speaker = speaker_for_interval(word['start'], word['end'], turns)
+        speaker = mapping.get(speaker, speaker)
+        if output and output[-1]['speaker'] == speaker and word['start'] - output[-1]['end'] < 1.0:
+            output[-1]['end'] = word['end']
+            output[-1]['text'] += word['text']
+        else:
+            output.append({'id': f'seg_{len(output) + 1:05}', 'start': word['start'],
+                           'end': word['end'], 'speaker': speaker, 'text': word['text']})
+    for item in output:
+        item['text'] = item['text'].strip()
+    return output
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--models', required=True, type=Path)
+    parser.add_argument('--audio', type=Path)
+    parser.add_argument('--output', type=Path)
+    parser.add_argument('--speakers', type=int, default=0)
+    args = parser.parse_args()
+    if not 0 <= args.speakers <= 50:
+        parser.error('人数应为 0（自动）到 50')
+    for key in ('HF_HUB_DISABLE_TELEMETRY', 'HF_HUB_DISABLE_IMPLICIT_TOKEN', 'DO_NOT_TRACK'):
+        os.environ[key] = '1'
+    segmentation, embedding, asr = prepare_models(args.models)
+    if not args.audio:
+        progress('本地模型已准备好')
+        return
+    if not args.output or args.output.exists():
+        raise ValueError('输出路径缺失或已经存在')
+    import sherpa_onnx
+    from faster_whisper import WhisperModel
+    from faster_whisper.audio import decode_audio
+    audio = decode_audio(str(args.audio), sampling_rate=16000)
+    if not len(audio):
+        raise ValueError('音频没有可读取的采样')
+    progress('正在区分说话人…')
+    config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
+        segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+            pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(segmentation)),
+            num_threads=2, provider='cpu'),
+        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding), num_threads=2, provider='cpu'),
+        clustering=sherpa_onnx.FastClusteringConfig(num_clusters=args.speakers or -1, threshold=.5),
+        min_duration_on=.3, min_duration_off=.5)
+    if not config.validate():
+        raise ValueError('说话人模型配置无效')
+    diarizer = sherpa_onnx.OfflineSpeakerDiarization(config)
+    turns = [{'start': t.start, 'end': t.end, 'speaker': t.speaker}
+             for t in diarizer.process(audio).sort_by_start_time()]
+    del diarizer
+    progress('正在转录文字…')
+    model = WhisperModel(str(asr), device='cpu', compute_type='int8', cpu_threads=4)
+    segments, info = model.transcribe(audio, word_timestamps=True, vad_filter=True,
+                                      beam_size=5, condition_on_previous_text=False)
+    words = []
+    for segment in segments:
+        words.extend({'start': w.start, 'end': w.end, 'text': w.word} for w in (segment.words or []))
+        if not segment.words and segment.text.strip():
+            words.append({'start': segment.start, 'end': segment.end, 'text': segment.text})
+        progress(f'已转录 {segment.end:.0f} / {len(audio) / 16000:.0f} 秒')
+    result = {'schema_version': 1, 'audio_file': args.audio.name, 'language': info.language,
+              'engine': 'faster-whisper small int8 + sherpa-onnx pyannote/3D-Speaker',
+              'speaker_count_requested': args.speakers, 'turns': turns,
+              'segments': align_words(words, turns)}
+    with args.output.open('x', encoding='utf-8') as file:
+        json.dump(result, file, ensure_ascii=False, indent=2)
+    progress('转录完成')
+
+
+if __name__ == '__main__':
+    try:
+        main()
+    except Exception as exc:
+        import sys
+        progress('处理失败：' + str(exc))
+        sys.exit(1)

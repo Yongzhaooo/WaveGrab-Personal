@@ -7,21 +7,12 @@ from collections import deque
 import numpy as np
 
 
-# Dark theme colors
 COLORS = {
-    "bg": "#1e1e1e",
-    "bg_lighter": "#2d2d2d",
-    "fg": "#ffffff",
-    "fg_dim": "#888888",
-    "accent": "#22c55e",        # Green for REC and toast
-    "accent_dark": "#16a34a",   # Dark green
-    "waveform": "#00ff88",
-    "waveform_dim": "#004422",
-    "meter_low": "#00ff88",
-    "meter_mid": "#ffcc00",
-    "meter_high": "#ff4444",
-    "border": "#3d3d3d",
-    "disabled": "#555555",
+    'bg': '#f5f7fa', 'bg_lighter': '#ffffff', 'fg': '#243141',
+    'fg_dim': '#637083', 'accent': '#147d75', 'accent_dark': '#0f635d',
+    'waveform': '#3b9b94', 'waveform_dim': '#d8eeea',
+    'meter_low': '#369989', 'meter_mid': '#b88420', 'meter_high': '#c44747',
+    'border': '#dce3eb', 'disabled': '#9da6b2',
 }
 
 
@@ -47,6 +38,12 @@ class WaveformCanvas(tk.Canvas):
 
         # Draw initial state
         self._draw_background()
+        self.bind('<Configure>', self._resize)
+
+    def _resize(self, event):
+        self._width, self._height = event.width, event.height
+        self._draw_background()
+        self._redraw()
 
     def _draw_background(self) -> None:
         """Draw background and center line."""
@@ -215,7 +212,7 @@ class OverlayProgress(tk.Frame):
         super().__init__(parent)
 
         self._parent = parent
-        self.configure(bg="#000000")
+        self.configure(bg=COLORS["bg"])
 
         # Center frame with border
         center_frame = tk.Frame(self, bg=COLORS["bg_lighter"], padx=40, pady=25)
@@ -275,7 +272,7 @@ class ToastNotification(tk.Frame):
             self,
             text="",
             bg=COLORS["accent"],
-            fg=COLORS["fg"],
+            fg="#ffffff",
             font=("Segoe UI", 11, "bold")
         )
         self._label.pack()
@@ -297,105 +294,32 @@ class ToastNotification(tk.Frame):
         self._after_id = None
 
 
-def apply_dark_theme(root: tk.Tk) -> ttk.Style | None:
-    """Apply dark theme to a tk window."""
-    root.configure(bg=COLORS["bg"])
-
-    style = None
-    try:
-        style = ttk.Style()
-
-        # Base theme
-        style.theme_use("clam")
-
-        # General background
-        style.configure(".", background=COLORS["bg"], foreground=COLORS["fg"])
-
-        # Frame
-        style.configure("TFrame", background=COLORS["bg"])
-        style.configure("TLabelframe", background=COLORS["bg"])
-        style.configure("TLabelframe.Label", background=COLORS["bg"], foreground=COLORS["fg"])
-
-        # Label
-        style.configure("TLabel", background=COLORS["bg"], foreground=COLORS["fg"])
-
-        # Button
-        style.configure(
-            "TButton",
-            background=COLORS["bg_lighter"],
-            foreground=COLORS["fg"],
-            borderwidth=1,
-            focuscolor=COLORS["accent"]
-        )
-        style.map(
-            "TButton",
-            background=[
-                ("disabled", COLORS["bg"]),
-                ("active", COLORS["accent_dark"]),
-                ("pressed", COLORS["accent"])
-            ],
-            foreground=[
-                ("disabled", COLORS["disabled"]),
-                ("active", COLORS["fg"])
-            ]
-        )
-
-        # Accent Button
-        style.configure(
-            "Accent.TButton",
-            background=COLORS["accent"],
-            foreground=COLORS["fg"]
-        )
-        style.map(
-            "Accent.TButton",
-            background=[("active", COLORS["accent_dark"]), ("pressed", COLORS["accent_dark"])]
-        )
-
-        # Combobox
-        style.configure(
-            "TCombobox",
-            fieldbackground=COLORS["bg_lighter"],
-            background=COLORS["bg_lighter"],
-            foreground=COLORS["fg"],
-            arrowcolor=COLORS["fg"]
-        )
-        style.map(
-            "TCombobox",
-            fieldbackground=[("readonly", COLORS["bg_lighter"])],
-            selectbackground=[("readonly", COLORS["accent"])],
-            selectforeground=[("readonly", COLORS["fg"])]
-        )
-
-        # Entry
-        style.configure(
-            "TEntry",
-            fieldbackground=COLORS["bg_lighter"],
-            foreground=COLORS["fg"],
-            insertcolor=COLORS["fg"]
-        )
-
-        # Scale (slider)
-        style.configure(
-            "TScale",
-            background=COLORS["bg"],
-            troughcolor=COLORS["bg_lighter"],
-            sliderthickness=15
-        )
-        style.configure(
-            "Horizontal.TScale",
-            background=COLORS["bg"],
-            troughcolor=COLORS["bg_lighter"]
-        )
-
-        # Scrollbar
-        style.configure(
-            "TScrollbar",
-            background=COLORS["bg_lighter"],
-            troughcolor=COLORS["bg"],
-            arrowcolor=COLORS["fg"]
-        )
-
-    except Exception:
-        pass  # Fallback if ttk doesn't work
-
+def apply_light_theme(root):
+    root.configure(bg=COLORS['bg'])
+    style = ttk.Style(root)
+    style.theme_use('clam')
+    style.configure('.', background=COLORS['bg'], foreground=COLORS['fg'], font=('Microsoft YaHei UI', 10))
+    style.configure('TFrame', background=COLORS['bg'])
+    style.configure('TLabel', background=COLORS['bg'])
+    style.configure('Muted.TLabel', foreground=COLORS['fg_dim'])
+    style.configure('Brand.TLabel', font=('Segoe UI', 21, 'bold'))
+    style.configure('Title.TLabel', font=('Microsoft YaHei UI', 15, 'bold'))
+    style.configure('Timer.TLabel', font=('Consolas', 32), foreground=COLORS['fg'])
+    style.configure('TButton', padding=(12, 8), background='#ffffff', bordercolor=COLORS['border'])
+    style.map('TButton', background=[('active', '#e8eeef')], foreground=[('disabled', COLORS['disabled'])])
+    style.configure('Accent.TButton', background=COLORS['accent'], foreground='#ffffff')
+    style.map('Accent.TButton', background=[('disabled', '#c6d3d1'), ('active', COLORS['accent_dark'])],
+              foreground=[('disabled', '#6d7c7a'), ('!disabled', '#ffffff')])
+    style.configure('TEntry', padding=7, fieldbackground='#ffffff', bordercolor=COLORS['border'])
+    style.configure('TCombobox', padding=6, fieldbackground='#ffffff', background='#ffffff', bordercolor=COLORS['border'])
+    style.map('TCombobox', fieldbackground=[('readonly', '#ffffff')],
+              selectbackground=[('readonly', '#ffffff')], selectforeground=[('readonly', COLORS['fg'])])
+    style.configure('TNotebook', background=COLORS['bg'], borderwidth=0)
+    style.configure('TNotebook.Tab', padding=(18, 10), background='#e9edf2')
+    style.map('TNotebook.Tab', background=[('selected', '#ffffff')], foreground=[('selected', COLORS['accent'])])
+    style.configure('Treeview', background='#ffffff', fieldbackground='#ffffff', rowheight=32, bordercolor=COLORS['border'])
+    style.configure('Treeview.Heading', background='#eaf0f4', padding=8, font=('Microsoft YaHei UI', 10, 'bold'))
+    style.map('Treeview', background=[('selected', '#dceeea')], foreground=[('selected', '#174d47')])
+    style.configure('Horizontal.TProgressbar', background=COLORS['accent'], troughcolor='#e6ecef')
+    style.configure('Horizontal.TScale', background=COLORS['bg'], troughcolor='#dce6e7')
     return style

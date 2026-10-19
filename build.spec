@@ -13,6 +13,7 @@ a = Analysis(
     binaries=[],
     datas=[
         ('assets', 'assets'),  # Include assets folder
+        ('src/transcribe_worker.py', '.'),
     ],
     hiddenimports=[
         'pyaudiowpatch',

@@ -1,33 +1,45 @@
 # WaveGrab Personal architecture
 
 Last confirmed: not yet confirmed
-Product spec: docs/product.md
-
-Everything below is `(proposed)` unless a README states it. Current structure was read from `src/`.
+Product spec: [product.md](product.md)
 
 ## Target structure
-Single-process Python 3.12 Windows desktop app; no network, no service.
 
-- `src/devices.py`, `config.py`, `paths.py`: device enumeration (loopback/mic), persisted settings (`config.json`), path resolution for source vs frozen exe.
-- `src/recorder.py`: WASAPI capture (PyAudioWPatch) per source in a thread with a bounded queue; mixer combines system and mic; owns capture errors and silent-source handling.
-- `src/writer.py`: FLAC writing (soundfile) for `mixed`, `system`, `mic` tracks.
-- `src/handoff.py`: writes `session.json` and `HANDOFF.md`, builds the clipboard prompt. Agent-neutral by design; the only contract with downstream agents.
-- `src/gui/` (`app.py`, `controller.py`, `widgets.py`): UI; `controller` is the only layer calling recorder/handoff. `src/main.py` is the CLI entry (proposed to keep as dev tool), `main_gui.py` the GUI entry.
-- `src/mp3_converter.py`: optional post-step (pydub); status unclear.
-- Build: `build.spec` / `build.bat` (PyInstaller) -> `dist/`. Verification: `selfcheck.py`.
+Windows 桌面程序保留现有 WASAPI 录音链路。浅色界面分为“录音”和“转录与说话人”，录音控制器继续独占设备生命周期；转录不访问录音设备，不改变 Teams 设置。
 
-State ownership: settings in `config.json`; recordings in the session folder (the folder is the unit of truth; no database).
+录后处理由单独的本地 Python 子进程运行。GUI 只传入用户选定的音频路径、输出路径及可选人数，接收进度与结构化结果。取消或模型失败不会覆盖原音频或已有转录。独立运行环境放在便携程序旁的 `.runtime`，模型在 `models`，录音 GUI 启动不加载模型。
+
+每个会话仍以文件夹为边界：
+
+- 原录音、`session.json` 和 `HANDOFF.md` 保持现有含义。
+- `transcript.raw.json` / `transcript.raw.md` 保存一次识别的不可变结果，片段含稳定 ID、时间、speaker ID 和原文。
+- `speakers.json` 是本次会议的显示名映射；另一会议不继承。
+- `transcript.edits.json` 保存人工或外部工具清洗后的片段文字，按片段 ID 对应。它不改变 speaker ID 或时间。
+- `exports/` 存放可重新生成的 Markdown、SRT 及有清洗结果时的清洗稿。名称修改从稳定 ID 重新生成全部本地导出，不在正文中搜索替换人名。
+
+`transcript_store.py` 负责校验结果、名称与清洗文本、落盘和导出；GUI 与外部工具共享文件契约。`transcribe_worker.py` 只负责模型推理和时间对齐；不依赖 Tk 或录音设备。
 
 ## Approach
-One viable approach: keep the flat-file session folder as the integration contract instead of an API, since agents already read files and the README forbids upload/CLI coupling. Handoff schema changes must stay additive so older agent prompts keep working.
+
+选用 faster-whisper 的本地 CPU int8 转录，以及 sherpa-onnx 的离线说话人分段（pyannote segmentation + 3D-Speaker embedding）。直接采用官方发布模型，避免把整套 Torch/WhisperX 运行时打进录音 EXE。模型首次下载需要联网，推理处理本地音频，不上传录音。
+
+语音按词时间戳与说话人时间段匹配，遇到明确重叠标为 overlap，无匹配标为 unknown。人数默认自动，用户可指定人数帮助聚类。实际混合会议的误分率仍由用户样本验收，不把声道当作人物身份。
+
+每次只转录一份用户选定音频，默认选择合成录音，不分别转录两路后重复拼接。房间回声在同一音频内造成的重复内容仍需实际样本验证；当前不声称有声学回声消除。
+
+模型结果首次写入使用排他创建；已有结果不会被“再次转录”覆盖。名称映射与清洗数据写入采用同目录临时文件替换。导出失败保留权威 JSON，UI 明确提示可刷新导出；导出目录是生成内容，外部清洗通过 edits 文件提交。
 
 ## Route
-1. Today (2 commits unpushed to origin/main): dual-source, room mode, silent-source fix. Acceptance: `selfcheck.py` passes.
-2. Housekeeping: stop tracking `config.json` per-user values and `__pycache__`/build outputs if tracked (check `.gitignore`). Acceptance: clean `git status` after a run.
-3. Decide MP3 converter fate (remove or document). Acceptance: README and requirements agree.
-4. Optional: add a `schema_version` field to `session.json` before any third consumer appears. Irreversible once agents depend on it; additive only.
+
+1. 本地推理、结构化说话人结果及会话内名称映射；验证真实公开多人样本及改名导出一致性。
+2. 两页签浅色界面，录音结束可直接进入处理，支持打开已有录音文件夹、取消处理和导出。
+3. 用户的现场/远端混合会议验证；按真实录音调整质量，确认 No audio 下的设备可用性。
+4. 画面记录留待用户确认截图范围及间隔后实施。
+
+现有录音文件无迁移要求；新增结果独立保存，旧版仍可读取原音频和交接文件。
 
 ## Open decisions
-- Publish the 2 unpushed commits to origin (Yongzhaooo/WaveGrab-Personal)? blocks: Route 1 being safe from loss.
-- Track `config.json`? blocks: Route 2.
-- Keep MP3 converter? blocks: Route 3.
+
+- 专门会议样本中的回声、漏词和错分是否达到用户可接受程度；阻塞质量验收。
+- 当前默认 CPU 小型多语模型的速度与准确度是否足够；阻塞长会议性能承诺，不阻塞当前本地处理入口。
+- 画面记录范围与默认间隔；阻塞截图实现。

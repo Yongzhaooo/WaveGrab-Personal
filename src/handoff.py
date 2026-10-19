@@ -50,6 +50,15 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
 4. 保留事实、数字、否定、条件及不确定性；不要把推测改成结论，不凭空补人名或责任人。
 5. 不覆盖原始转录。若工具不能读取音频，明确说明缺少的转录能力，不假装已听取。
 
+## 已有说话人转录时
+
+若存在 `transcript.raw.json`，直接使用其中的稳定片段 ID、说话人 ID 和时间戳。
+`speakers.json` 是本会议内的显示名映射，不跨会议推断人物。
+清洗文字写入 `transcript.edits.json`，格式为片段 ID 到清洗文字的 JSON 对象，
+例如 `{{"seg_00001": "清洗后的文字"}}`；保留未修改的已有编辑，不修改原始识别文件。
+完成后在程序中点击“刷新结果”，统一生成 `exports/` 下的 Markdown、SRT 和清洗稿。
+`exports/` 是可覆盖的生成内容；不要把唯一的人工修改只存放在这里。
+
 本文件是普通文本入口，不会自动启动工具或上传录音。
 '''
     path = folder / 'HANDOFF.md'
@@ -59,5 +68,7 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
 
 def clipboard_prompt(folder: Path) -> str:
     return (f'请处理这个录音文件夹：{folder.resolve()}\n'
-            '先阅读 HANDOFF.md，按其中要求转录音频、保留原始转录，再清洗为 Markdown。'
-            '原始音频不要改动。')
+            '先阅读 HANDOFF.md（如果存在）。已有 transcript.raw.json 时复用其片段 ID、时间和说话人，'
+            '参考 speakers.json 的会议内名称，将清洗后的文字写入 transcript.edits.json '
+            '（片段 ID 到文字的 JSON 对象，保留已有编辑）。没有转录时先转录。'
+            '不修改原始音频、原始识别结果或说话人归属；不编造听不清的内容。')

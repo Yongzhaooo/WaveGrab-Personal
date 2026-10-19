@@ -1,38 +1,95 @@
-# WaveGrab Personal product spec
+# WaveGrab Personal 产品规格
 
 Last confirmed: not yet confirmed
 
-Source: README.md (Chinese, UTF-8), src/, selfcheck.py. Items not stated in the README are marked `(proposed)`.
+本文描述产品的目标行为，不代表功能均已实现。依据用户在本项目对话中确认的录音场景、说话人区分与名称映射要求，以及 [README](../README.md)。未确认的产品选择标为 `(proposed)`。
 
 ## Purpose
-A personal Windows desktop recorder (fork of francescoscalzo/WaveGrab, MIT) that captures meeting/system audio and the microphone as separate tracks, then hands the recording folder to a local AI agent (Codex, agy, etc.) for transcription and notes. It runs offline; no API keys, uploads or CLI coupling.
+
+为个人在 Windows 上保留可转录的会议录音，支持单麦克风收录多人发言，以及现场人员与远端人员混合参会。录后得到带时间戳、说话人标记的文字，允许用户统一命名，再交给 Codex、agy 或其他工具清洗。
 
 ## Expectations
-### Recording
-- One click starts a "meeting" recording: system loopback and microphone are captured together on Windows 10/11 via WASAPI. Stop ends it.
-- A "room mode" records the microphone only, without changing the meeting-audio path.
-- A silent source (e.g. Teams showing "No audio") does not abort the recording; the other track is kept.
-- Output goes to `Music/WaveGrab` by default; the folder is configurable in the GUI.
 
-### Output folder (agent handoff)
-- Each session is one folder named `<timestamp>_<title>` containing `mixed.flac`, `system.flac`, `mic.flac`, `HANDOFF.md`, `session.json`.
-- `session.json` records status, error, duration, devices and file list, in UTF-8; `HANDOFF.md` tells an agent what to do next.
-- In room mode the agent is told to use `mic.flac` rather than `mixed.flac`.
-- The GUI offers copying a ready prompt to the clipboard for the agent.
-- A failed or partial session still writes a handoff with `status` and `error` (proposed).
+### 主要会议场景
 
-### Distribution
-- Run from source (`src/main_gui.py`) or as a PyInstaller folder build (`dist/WaveGrab-Personal.exe`, `Start-WaveGrab.cmd`); `_internal` must stay beside the exe.
-- `selfcheck.py` passes offline: real mixer, independent tracks, UTF-8 handoff.
+- 情景 1：大家主要轮流说话，声音清楚。即使只有一支麦克风，也能按不同说话人标记发言；不要求每人一条独立音轨。
+- 情景 3：现场人员与远端人员共同参会，远端声音通常通过会议室音响或在线会议的 speaker 播放，用户的电脑也加入会议。不同远端人员仍是不同说话人，不因共用扬声器而统一标成一个人。
+- 支持按真实音频路径选择录制方式：会议室音响的声音由现场麦克风收录；由本机播放的远端声音可通过系统回环采集，并与麦克风音轨一同保留。电脑加入会议本身不代表它正在输出远端声音。
+- 多人同时说话是次要情况。不能可靠判断的片段保留时间位置并标为重叠或未知，不强行归给某个人 `(proposed)`。
+
+### 录音与会议音频独立
+
+- 默认「会议室模式」只读取用户选择的麦克风，用来收录现场人员及房间音响；不打开系统声音回环，也不播放音频。
+- 用户关闭会议室模式后，可以选择系统声音与麦克风双路录制，保留合成音频和所选来源的独立音轨。
+- Teams 内的静音或 No audio 不被录音程序修改。程序不自动启用被 Windows 禁用的设备，不自动解除硬件或系统静音。
+- 用户点击「开始录音」或「检查输入」才开始采集。「检查输入」显示输入音量，不通过扬声器回放。
+- 设备未收到采样或麦克风采样持续为零时，提示具体来源及可能的静音问题。已录到的其他音轨保留；不把缺失的声音标为完整录制成功。
+- 暂停期间不保存声音。静音来源不拖慢其他音轨；保存后的时长与实际有效录制时长相符。
+
+### 说话人分段与转录
+
+- 程序提供“录音”和“转录与说话人”两个页签；转录由独立本地进程执行，名称编辑与结果查看在程序内完成。
+- 以单次会议为范围，输出带开始/结束时间、稳定说话人 ID 和正文的发言片段。默认显示为 `Speaker 1`、`Speaker 2` 等，不需要识别真实姓名。
+- 同一人轮流发言后再次开口时，继续使用同一说话人 ID；现场人与扬声器里的远端人均参与分段。
+- 音轨来源与说话人身份分开：一条 mic 音轨可含多人，一条 system 音轨也可含多个远端人。来源不能直接替代说话人标记。
+- 原始转录保留语言、术语、时间戳和不确定内容；清洗稿保留事实、数字、否定和条件，不凭空补充姓名或结论。
+- 录后批量处理是默认方式，不要求录制中实时显示转录。
+- 双路录音中，同一句远端发言可能既出现在系统回环，又被麦克风从音响收回。后处理避免把它输出为两次发言；具体效果由混合会议样本验证 `(proposed)`。
+
+### 当前会议内统一命名
+
+- 用户可以不命名，直接使用 `Speaker 1` 等标签。
+- 用户给某个说话人设置一次显示名，该会议所有对应发言、清洗稿和本地衍生导出统一更新，不需要逐段替换。
+- 改名只改变显示名，不改变发言归属、时间戳或原始音频。原始识别输出保留稳定 ID，显示名通过会议内映射关联。
+- 名称映射随会议结果保存，重新打开同一会议仍可使用。`Speaker 1` 在另一场会议中是独立标签，不自动沿用前一场会议的姓名。
+
+### 录音文件与通用交接
+
+- 每次录音使用单独文件夹，默认位置是用户的 `Music/WaveGrab`，可在界面修改。
+- 保留 `mixed.flac`、所选来源对应的 `mic.flac` / `system.flac`、`HANDOFF.md` 和 `session.json`。会议室模式不生成系统音轨；其 `mic.flac` 与合成音频均代表本次麦克风录音。
+- `session.json` 记录设备、文件清单、时长、完成状态和错误；部分失败仍保留可用音频及状态说明。
+- 「打开录音文件夹」和「复制交接说明」提供通用入口，不绑定某个 AI 工具。交接包含可用音轨、转录清洗要求及已有的说话人结果和名称映射。
+- 录音程序不自动上传音频或调用 AI。原始音频和原始转录保留，处理结果在同一会话中另存；现有交接文本见 [src/handoff.py](../src/handoff.py)。
+
+### 后续画面记录
+
+- 保留轻量画面记录这一后续需求；它不是当前说话人功能的前置条件。
+- `(proposed)` 用户可选每 5 秒保存一张截图，以相对录音时间定位会议画面；截图随会话保存，暂停时停止截图。默认间隔、截图范围及是否输出视频尚未确认。
+
+### 分发与使用
+
+- 支持 Windows 源码启动及本地便携程序。用户运行 `dist/WaveGrab-Personal.exe` 或 `Start-WaveGrab.cmd`；移动便携程序时同时保留 `_internal`。
+- 用户本地设备选择和录音路径保存在本机配置中；录音与配置不作为公开源码发布内容。
 
 ## Non-goals
-- Cloud upload, built-in transcription or AI calls, API-key handling.
-- macOS/Linux support (proposed).
-- Multi-user or installer/auto-update distribution (proposed).
-- Video capture, editing, or a library/search UI (proposed).
+
+- 自动识别真实姓名、跨会议声纹人物库或跨会议自动关联身份。
+- 为每位参会者配置独立麦克风，或要求用户为普通轮流发言先注册声纹。
+- 从没有采集到的声音中恢复内容，或绕过硬件禁用、系统静音和麦克风权限。
+- 保证多人抢话时逐句准确分人，或生成每个人完全干净的独立音轨。
+- 自动替用户加入会议、解除 Teams 静音或改变会议音频路由。
+- 当前阶段的视频剪辑功能；画面记录的形式保留在后续需求中。
 
 ## Open questions
-- Is the fork meant to be published/shared, or stay private? blocks: README language (currently Chinese only), release packaging, upstream sync policy.
-- Which agents must the handoff prompt support beyond Codex and agy? blocks: HANDOFF.md wording.
-- Is the MP3 converter (`src/mp3_converter.py`) still a supported feature? blocks: dependency list (pydub) and README accuracy.
-- Should `config.json` (contains local device names and user path) be tracked? blocks: repo hygiene / sharing.
+
+- 实际会议样本中，房间音响、电脑回环及麦克风分别采到什么，是否重复收录同一句远端声音？blocks: 混合场景的音轨选择与重复发言处理验收。用户安排专门会议提供验证条件。
+- Teams 以 No audio 加入时，选定麦克风是否仍能被本地程序读取？blocks: 该入会方式的兼容性承诺。会外麦克风试录不能替代会内验证。
+- 用户对错分说话人、漏转录和处理等待时间的可接受程度如何？blocks: 最终质量与性能验收标准；不预先承诺准确率或处理速度。
+- 后续画面记录选择哪个屏幕、窗口或区域，5 秒是否作为默认间隔？blocks: 截图交互及画面记录范围。
+
+## 验收观察点
+
+| 场景 | 可观察的目标行为 |
+| --- | --- |
+| 单麦克风、多人轮流发言 | 发言有时间位置；同一人再次发言仍使用同一 ID，能够人工对照录音检查 |
+| 现场与远端混合 | 区分不同现场和远端说话人，不把所有扬声器声音归成一个人 |
+| 当前会议统一命名 | 改一次 `Speaker 1` 的显示名，相关发言与本地衍生导出统一更新；其他说话人不变 |
+| 关闭并重新打开结果 | 当前会议的名称映射仍在，另一场会议不自动继承 |
+| No audio 入会 | Teams 设置保持不变；明确显示本地麦克风是否有输入，采集失败不伪报成功 |
+| 部分来源缺失 | 可用录音保留，状态明确指出缺失来源 |
+
+## 规格与当前实现的差距
+
+当前实现提供录音、会议室模式、输入检查、本地录后转录及说话人分段、会议内名称映射、片段文字校正和 Markdown/SRT 导出。原始转录保留；外部清洗通过 `transcript.edits.json` 导入，结果在界面中刷新。技术选择和运行环境见 [架构说明](architecture.md)。
+
+公开双人语音样本与离线检查验证功能链路；真实现场/远端混合会议、No audio 入会兼容性和长会议质量仍待用户样本验证。当前没有声学回声消除或画面记录功能，不把“没有分别转录两条音轨”当作已经消除录音内回声。

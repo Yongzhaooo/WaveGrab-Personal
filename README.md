@@ -1,40 +1,43 @@
 # WaveGrab Personal
 
-Windows 双路录音小工具。基于 [WaveGrab](https://github.com/francescoscalzo/WaveGrab)（MIT）修改。
+本地 Windows 会议录音与说话人转录工具，基于 [WaveGrab](https://github.com/francescoscalzo/WaveGrab)（MIT）修改。
 
 ## 使用
 
-运行 `dist/WaveGrab-Personal.exe`，或双击 `Start-WaveGrab.cmd`。
-EXE 旁边的 `_internal` 文件夹是运行所需组件，移动程序时请一起保留。
+运行 `dist/WaveGrab-Personal.exe` 或双击 `Start-WaveGrab.cmd`。
 
-1. 默认选择 Windows 当前的系统声音和麦克风，也可以手动换设备。
-2. 填录音主题，点击 **开始录音**；需要时暂停或切换 Mini 窗口。
-3. 点击 **停止保存**。
-4. 点击 **打开录音文件夹**，或 **复制交接说明**，粘贴给 Codex、agy 或其他工具。
+**录音**：默认会议室模式，只读取所选麦克风。它收录现场人员及房间音响，不播放声音，不修改 Teams 的静音或 No audio 设置。取消会议室模式可录系统声音和麦克风两路。录音前可点“检查输入”，暂停和 Mini 窗口仍可使用。
 
-默认保存在用户的 `Music/WaveGrab` 文件夹，可在界面中修改。
-默认勾选 **会议室模式 · 只录麦克风**：用笔记本麦克风收录现场声音和会议室音响，
-不打开系统声音回环、不播放音频、不改变 Teams 的静音或 No audio 设置。
-取消勾选即可恢复系统声音与麦克风双路录制；模式会在下次启动时保留。
-如果麦克风被硬件或 Windows 禁用/静音，需要用户自行处理；程序不会自动启用或解除静音。
-“检查输入”只显示输入音量，不会通过扬声器回放。
+**转录与说话人**：录音保存后进入此页，也可打开已有音频文件夹。选择音频，人数填 0 自动判断，或填写已知人数，然后点“转录并区分说话人”。处理期间可以取消，原音频保留。
 
-每次录音单独建文件夹，包含：
+**命名和校正**：选择 Speaker 1 等标签，输入名称，点“整场统一改名”。名称只作用于这次会议，所有相关段落与本地导出同步更新。选中一段可查看完整文字、双击校正；原始识别输出不被覆盖。
 
-- `mixed.flac`：合成的无损音频，优先用于转录。
-- `system.flac`、`mic.flac`：所选设备的独立音轨。
-- `HANDOFF.md`：通用转录和清洗要求。
-- `session.json`：设备、录制时长和完成状态。
+**清洗交接**：复制交接说明给 Codex、agy 或其他工具。已有转录时，工具按片段 ID 把清洗文字写入 `transcript.edits.json`；点“刷新结果”生成清洗稿。应用本身不调用远程大模型做语义清洗。
 
-会议室模式只生成 `mic.flac` 和 `mixed.flac`，不生成系统音轨。
+默认录音目录为用户的 `Music/WaveGrab`，可以修改。每次录音一个文件夹：
 
-音轨按录制音量保存；独立来源不等同于说话人分离。暂停期间不保存声音。
-FLAC 无需 FFmpeg；应用不内置转录模型，也不会启动 AI 工具或上传录音。
-下游工具需要有读取音频或调用转录工具的能力。
+| 文件 | 含义 |
+| --- | --- |
+| `mixed.flac`、`mic.flac`、`system.flac` | 无损合成音频及所选来源；会议室模式没有系统音轨 |
+| `session.json`、`HANDOFF.md` | 录音状态、设备及通用交接 |
+| `transcript.raw.json`、`transcript.raw.md` | 一次识别的原始结果，包含稳定片段和 speaker ID，不覆盖 |
+| `speakers.json` | 当前会议的显示名映射 |
+| `transcript.edits.json` | 清洗或校正文字，格式如 `{"seg_00001": "校正后的内容"}` |
+| `exports/transcript.md`、`exports/transcript.srt` | 按当前名称重新生成的导出；SRT 在有编辑时使用校正文字 |
+| `exports/transcript.clean.md` | 有编辑时生成的清洗稿，标明已编辑片段数量 |
+| `transcription.log` | 最近一次处理的进度或错误 |
+
+`exports/` 可重新生成，不要把唯一的手工修改只放在这里。原始 JSON 不要手改 ID；需要重新识别时使用另一个音频文件夹，避免旧名称被错误套到新 speaker ID。
+
+## 本地转录环境
+
+当前使用 faster-whisper small 多语言模型（CPU int8）和 sherpa-onnx 说话人分段。无需付费 API 或账户；首次下载模型需要网络，音频处理在本机进行。较长会议在 CPU 上可能较慢。
+
+从源码安装：运行 `Setup-Transcription.cmd`。它在 `dist/.runtime` 安装独立 Python 环境，在 `dist/models` 下载模型。需要本机 Python 3.12 或 3.13。录音 EXE 旁边的 `_internal` 是必需组件；本地转录还需要 `.runtime` 与 `models`。Python 虚拟环境不应直接搬到另一台电脑，换电脑请从源码重新运行安装脚本。
+
+模型来源：[sherpa-onnx segmentation](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-segmentation-models)、[3D-Speaker embedding](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models)、[faster-whisper small](https://huggingface.co/Systran/faster-whisper-small)。模型缓存与录音不提交 Git。
 
 ## 从源码运行或打包
-
-Windows 10/11、Python 3.12 或更新版本：
 
 ```powershell
 $env:PYTHONUTF8='1'
@@ -45,7 +48,15 @@ python -m venv .venv
 .\build.bat
 ```
 
-离线小检查：`.\.venv\Scripts\python.exe selfcheck.py`。
-它用合成音频覆盖混音、独立音轨和 UTF-8 交接文件，不开启麦克风。
+离线检查：
 
-许可证与原作者声明见 [LICENSE](LICENSE)。
+```powershell
+.\.venv\Scripts\python.exe selfcheck.py
+.\.venv\Scripts\python.exe -m unittest test_transcripts -v
+```
+
+这些检查覆盖录音保存、会议室模式、转录结果保护、改名/清洗导出和 UI 状态，不开启麦克风。
+
+实际混合会议、回声和多人抢话的质量待真实样本验证；未知或明确重叠的片段会单独标记。程序不会启用被 Windows 禁用的设备或解除硬件静音。5 秒截图仍是后续需求。
+
+产品要求见 [docs/product.md](docs/product.md)，结构与取舍见 [docs/architecture.md](docs/architecture.md)。原作者声明与源码许可证见 [LICENSE](LICENSE)。
