@@ -229,6 +229,7 @@ class VisualTests(unittest.TestCase):
             app = AudioRecorderApp()
         try:
             panel = app.result_panel
+            app.auto_mode_var.set(False)
             panel.set_folder(self.folder)
             panel.busy = True
             with patch.object(app.controller, 'start_recording', return_value=True) as start, patch.object(app, '_save_config'):

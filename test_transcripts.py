@@ -102,7 +102,8 @@ class TranscriptTests(unittest.TestCase):
                 self.assertEqual(panel.tree.item('seg_00001')['values'][1], '会议室甲')
                 self.assertEqual(panel.tree.item('seg_00003')['values'][1], '会议室甲')
                 self.assertEqual(panel.tree.item('seg_00002')['values'][1], 'Speaker 2')
-                self.assertEqual(str(app.loopback_combo['state']), 'disabled')
+                self.assertEqual(str(app.loopback_combo['state']), 'readonly')
+                self.assertTrue(app.controller.room_mode)
                 self.assertFalse(app.controller.is_recording)
             finally:
                 app.root.destroy()

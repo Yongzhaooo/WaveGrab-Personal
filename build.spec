@@ -1,6 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+from comtypes.client import GetModule
+
+GetModule('UIAutomationCore.dll')
 
 block_cipher = None
 
@@ -31,6 +34,7 @@ a = Analysis(
         'recorder',
         'writer',
         'config',
+        'comtypes.gen.UIAutomationClient',
         'handoff',
         'gui',
         'gui.app',

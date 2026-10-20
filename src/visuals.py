@@ -61,6 +61,10 @@ def window_status(target):
     user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     if not user.IsWindow(hwnd) or pid.value != target.pid:
         return '窗口已关闭'
+    title = ctypes.create_unicode_buffer(1024)
+    user.GetWindowTextW(hwnd, title, len(title))
+    if title.value != target.title:
+        return '会议窗口标题已变化，截图已暂停'
     if user.IsIconic(hwnd) or not user.IsWindowVisible(hwnd):
         return '窗口已最小化或隐藏'
     return ''

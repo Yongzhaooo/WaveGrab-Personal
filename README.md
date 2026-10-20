@@ -30,6 +30,10 @@ VB-CABLE 是单独安装的非开源 donationware 驱动，不随本项目打包
 
 **转录与说话人**：录音保存后进入此页，也可打开已有音频文件夹。选择音频，人数填 0 自动判断，或填写已知人数，然后点“转录并区分说话人”。处理期间可以取消，原音频保留。
 
+默认启用“自动识别 Teams 会议”：按 Alt+R 后，确认单个会议窗口及 Teams 的 VB-CABLE 输出会话时自动录双路并选择会议窗口；否则使用会议室模式。没有截图目标也能录音。可取消自动识别后手动选择模式。程序不改变 Teams 或系统声音设置。
+
+后台录音时，屏幕右下角任务栏上方有小红点；Alt+M 成功打标后短暂变成绿色空心点。暂停为琥珀色空心，保存完成后小点消失。小点不抢焦点或拦截鼠标；未录音时按 Alt+M 短闪琥珀色。
+
 录音和处理可并行：旧会议正在转录时可以录新会议，只禁止转录仍在写入的那一场。停止录音会先保存音频并恢复就绪，截图收尾和回看页生成在后台进行。退出时回看页若未生成，下次点击“回看画面与标记”可重新生成；原音频与时间轴不依赖回看页。
 
 **命名和校正**：选择 Speaker 1 等标签，输入名称，点“整场统一改名”。名称只作用于这次会议，所有相关段落与本地导出同步更新。选中一段可查看完整文字、双击校正；原始识别输出不被覆盖。
@@ -78,6 +82,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe selfcheck.py
 .\.venv\Scripts\python.exe -m unittest test_transcripts -v
 .\.venv\Scripts\python.exe -m unittest test_visuals -v
+.\.venv\Scripts\python.exe -m unittest test_meeting -v
 .\dist\.runtime\Scripts\python.exe -m unittest test_diarization -v
 ```
 

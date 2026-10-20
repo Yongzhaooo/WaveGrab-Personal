@@ -5,3 +5,4 @@ pydub>=0.25.1
 Pillow==13.0.0
 pystray==0.19.5
 windows-capture==2.0.1
+pycaw==20260927

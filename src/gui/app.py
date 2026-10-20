@@ -17,7 +17,8 @@ sys.path.insert(0, str(get_src_path()))
 
 from devices import AudioDevice, get_devices, get_default_devices, get_system_sources
 from config import AppConfig, load_config, save_config
-from visuals import teams_windows, window_status, write_review
+from visuals import window_status, write_review
+from meeting import MeetingScene, detect_scene
 from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, COLORS, apply_light_theme
 from .transcripts import TranscriptPanel
 from .controller import RecordingController, RecordingCallbacks, RecordingState
@@ -33,6 +34,11 @@ class AudioRecorderApp:
         self._closing = False
         self._last_error = ''
         self.desktop = None
+        self.indicator = None
+        self._start_pending = None
+        self._start_serial = 0
+        self._scene_busy = False
+        self._recording_detail = ''
         self._screen_windows = []
         self.root.geometry("940x670")
 
@@ -70,8 +76,9 @@ class AudioRecorderApp:
         self.loopback_var = tk.StringVar()
         self.mic_var = tk.StringVar()
         self.room_mode_var = tk.BooleanVar(value=self.config.room_mode)
+        self.auto_mode_var = tk.BooleanVar(value=self.config.auto_mode)
         self.screenshots_var = tk.BooleanVar(value=self.config.screenshots_enabled)
-        self.screen_window_var = tk.StringVar(value='点击刷新，选择 Teams 会议窗口')
+        self.screen_window_var = tk.StringVar(value='开始录音时自动识别会议窗口')
         self.screen_status_var = tk.StringVar(value='只截所选窗口；最小化时暂停截图，录音继续')
         self.loopback_vol_var = tk.DoubleVar(value=self.config.loopback_volume * 100)
         self.mic_vol_var = tk.DoubleVar(value=self.config.mic_volume * 100)
@@ -141,9 +148,14 @@ class AudioRecorderApp:
         ttk.Label(title_row, text='主题', width=9).pack(side='left')
         ttk.Entry(title_row, textvariable=self.filename_var).pack(side='left', fill='x', expand=True)
         self.filename_var.trace_add('write', lambda *_: self._update_preview())
-        self.room_mode_check = ttk.Checkbutton(page, text='会议室模式 · 只录麦克风',
+        modes = ttk.Frame(page)
+        modes.pack(fill='x')
+        self.auto_mode_check = ttk.Checkbutton(modes, text='自动识别 Teams 会议',
+            variable=self.auto_mode_var, command=self._on_room_mode_change)
+        self.auto_mode_check.pack(side='left', padx=(0, 18))
+        self.room_mode_check = ttk.Checkbutton(modes, text='会议室模式 · 只录麦克风',
             variable=self.room_mode_var, command=self._on_room_mode_change)
-        self.room_mode_check.pack(anchor='w')
+        self.room_mode_check.pack(side='left')
         self.mode_hint = ttk.Label(page, text='', style='Muted.TLabel', wraplength=780)
         self.mode_hint.pack(anchor='w', pady=(2, 4))
         devices = ttk.Frame(page)
@@ -285,12 +297,15 @@ class AudioRecorderApp:
             self.room_mode_var.set(self.controller.room_mode)
             return
         room = self.controller.room_mode
-        self.loopback_combo.configure(state=tk.DISABLED if room else 'readonly')
-        if room:
+        automatic = self.auto_mode_var.get()
+        self.room_mode_check.configure(state='disabled' if automatic else 'normal')
+        self.loopback_combo.configure(state='readonly' if automatic or not room else 'disabled')
+        if room and not automatic:
             self._system_row.pack_forget()
         else:
             self._system_row.pack(fill='x', pady=(0, 8))
         self.mode_hint.configure(text=(
+            '默认录麦克风；确认 Teams 会议正在使用所选虚拟声卡时，自动录双路及会议窗口。' if automatic else
             '录会议室里的声音；不播放音频，不改变 Teams 静音或 No audio 设置。' if room else
             '录系统输出或虚拟声卡输入，加上实际麦克风；不回放声音。'))
 
@@ -433,28 +448,65 @@ class AudioRecorderApp:
         """Start recording."""
         if self.controller.state not in (RecordingState.IDLE, RecordingState.MONITORING):
             return
+        if self._start_pending is not None:
+            return
+        if self.controller.state == RecordingState.MONITORING:
+            self.controller.stop_monitoring()
+        if self.auto_mode_var.get():
+            self._start_serial += 1
+            token = self._start_serial
+            self._start_pending = token
+            self.rec_btn.configure(state='disabled')
+            self.status_var.set('准备录音 · 正在识别会议')
+            if self.indicator:
+                self.indicator.update('准备中')
+            self._scan_scene(lambda scene: self._finish_auto_start(token, scene))
+            self.root.after(2500, lambda: self._finish_auto_start(token,
+                MeetingScene(detail='会议识别超时 · 已使用会议室模式')))
+        else:
+            self._start_recording()
+
+    def _finish_auto_start(self, token, scene):
+        if self._closing or self._start_pending != token:
+            return
+        self._start_pending = None
+        if not self.auto_mode_var.get():
+            self._start_recording()
+            return
+        self._set_scene_windows(scene)
+        self.room_mode_var.set(not (scene.target and scene.virtual_audio))
+        self._on_room_mode_change()
+        self._start_recording(scene)
+
+    def _start_recording(self, scene=None):
         self.controller.set_output_folder(self.output_folder_var.get())
         self.controller.set_filename_prefix(self.filename_var.get())
         self.controller.screen_target = None
+        self._recording_detail = scene.detail if scene else ('会议室模式' if self.room_mode_var.get() else '手动双路')
         if self.screenshots_var.get():
-            index = self.screen_combo.current()
-            if index < 0 or index >= len(self._screen_windows):
-                self._report_error('请先刷新并选择要截图的 Teams 会议窗口。')
-                return
-            target = self._screen_windows[index]
-            reason = window_status(target)
-            if reason:
-                self._report_error(reason + '，请恢复会议窗口后重试。')
-                return
-            self.controller.screen_target = target
+            if scene is not None:
+                target = scene.target if scene.virtual_audio else None
+            else:
+                index = self.screen_combo.current()
+                target = self._screen_windows[index] if 0 <= index < len(self._screen_windows) else None
+            reason = window_status(target) if target else ''
+            if target and not reason:
+                self.controller.screen_target = target
+            elif target:
+                self._recording_detail += ' · ' + reason + '，仅录音'
 
         self._last_error = ''
         if self.controller.start_recording():
             self.test_btn.configure(text="检查输入", state=tk.DISABLED)
-            self.status_var.set("录音中…")
+            self.status_var.set('录音中 · ' + self._recording_detail)
             self._save_config()
             if self.desktop:
                 self.desktop.set_detail('Alt+M 打标，Alt+R 停止')
+        else:
+            self.rec_btn.configure(state='normal')
+            if self.indicator:
+                self.indicator.update('就绪')
+                self.indicator.flash('error')
 
     def _on_pause(self) -> None:
         """Pause or resume recording."""
@@ -488,6 +540,7 @@ class AudioRecorderApp:
     def _update_ui_state(self, state: RecordingState) -> None:
         """Update UI based on state."""
         idle = state == RecordingState.IDLE
+        self.auto_mode_check.configure(state='normal' if idle else 'disabled')
         self.screen_check.configure(state='normal' if idle else 'disabled')
         self.screen_combo.configure(state='readonly' if idle else 'disabled')
         self.screen_refresh.configure(state='normal' if idle else 'disabled')
@@ -496,9 +549,13 @@ class AudioRecorderApp:
             self.desktop.update({RecordingState.IDLE: '就绪', RecordingState.RECORDING: '录音中',
                 RecordingState.PAUSED: '已暂停', RecordingState.MONITORING: '检查输入',
                 RecordingState.SAVING: '保存中'}[state])
-        self.room_mode_check.configure(state=tk.NORMAL if state == RecordingState.IDLE else tk.DISABLED)
+        if self.indicator:
+            self.indicator.update({RecordingState.IDLE: '就绪', RecordingState.RECORDING: '录音中',
+                RecordingState.PAUSED: '已暂停', RecordingState.MONITORING: '检查输入',
+                RecordingState.SAVING: '保存中'}[state])
+        self.room_mode_check.configure(state='normal' if idle and not self.auto_mode_var.get() else 'disabled')
         self.mic_combo.configure(state='readonly' if state == RecordingState.IDLE else 'disabled')
-        self.loopback_combo.configure(state='readonly' if state == RecordingState.IDLE and not self.room_mode_var.get() else 'disabled')
+        self.loopback_combo.configure(state='readonly' if idle and (self.auto_mode_var.get() or not self.room_mode_var.get()) else 'disabled')
         if state == RecordingState.IDLE:
             self.screen_status_var.set('只截所选窗口；最小化时暂停截图，录音继续')
             self._overlay.hide()
@@ -529,7 +586,7 @@ class AudioRecorderApp:
             self.stop_btn.configure(state=tk.NORMAL)
             self.test_btn.configure(state=tk.DISABLED, text="检查输入")
             self.mini_btn.configure(state=tk.NORMAL)
-            self.status_var.set("录音中…")
+            self.status_var.set('录音中 · ' + self._recording_detail)
             if hasattr(self, '_mini_pause_btn'):
                 self._mini_pause_btn.configure(text="||")
 
@@ -590,6 +647,8 @@ class AudioRecorderApp:
         self.status_var.set(message)
         if self.desktop:
             self.desktop.set_detail(message, error=True)
+        if self.indicator:
+            self.indicator.flash('error')
 
     def _on_recording_saved(self, path: Path) -> None:
         """Audio is closed and available independently of optional processing."""
@@ -622,6 +681,7 @@ class AudioRecorderApp:
     def _save_config(self) -> None:
         """Save current configuration."""
         self.config.room_mode = self.room_mode_var.get()
+        self.config.auto_mode = self.auto_mode_var.get()
         self.config.screenshots_enabled = self.screenshots_var.get()
         display_loopback = self.loopback_var.get()
         display_mic = self.mic_var.get()
@@ -686,12 +746,49 @@ class AudioRecorderApp:
     def _refresh_windows(self):
         if self.controller.state != RecordingState.IDLE:
             return
-        self._screen_windows = teams_windows()
+        self.screen_status_var.set('正在识别 Teams 通话窗口…')
+        self._scan_scene(self._set_scene_windows)
+
+    def _scan_scene(self, complete):
+        if self._scene_busy:
+            complete(MeetingScene(detail='会议识别尚未完成 · 会议室模式'))
+            return
+        self._scene_busy = True
+        index = self.loopback_combo.current() - 1
+        capture_name = self.loopback_devices[index].name if 0 <= index < len(self.loopback_devices) else ''
+        def scan():
+            try:
+                scene = detect_scene(capture_name)
+            except Exception as exc:
+                scene = MeetingScene(detail='会议识别不可用 · 会议室模式：' + str(exc))
+            self._post(lambda: deliver(scene))
+        def deliver(scene):
+            self._scene_busy = False
+            if not self._closing:
+                current = self.loopback_combo.current() - 1
+                selected = self.loopback_devices[current].name if 0 <= current < len(self.loopback_devices) else ''
+                if selected != capture_name:
+                    scene = MeetingScene(detail='识别期间声音设备已改变 · 会议室模式')
+                complete(scene)
+        threading.Thread(target=scan, daemon=True).start()
+
+    def _set_scene_windows(self, scene):
+        self._screen_windows = scene.windows
         self.screen_combo.configure(values=[w.title for w in self._screen_windows])
-        self.screen_window_var.set('请选择 Teams 会议窗口' if self._screen_windows else '没有找到 Teams 窗口')
+        if scene.target:
+            self.screen_combo.current(0)
+        else:
+            self.screen_window_var.set('请选择会议窗口' if scene.windows else '没有确认的 Teams 会议窗口')
+        self.screen_status_var.set(scene.detail)
 
     def _toggle_recording(self):
-        if self.controller.is_recording:
+        if self._start_pending is not None:
+            self._start_pending = None
+            self.rec_btn.configure(state='normal')
+            self.status_var.set('已取消开始录音')
+            if self.indicator:
+                self.indicator.update('就绪')
+        elif self.controller.is_recording:
             self._on_stop()
         elif self.controller.state == RecordingState.IDLE:
             self._on_rec()
@@ -704,8 +801,12 @@ class AudioRecorderApp:
                 self.status_var.set(text)
                 if self.desktop:
                     self.desktop.set_detail(text)
+                if self.indicator:
+                    self.indicator.flash('marker')
             else:
                 self.status_var.set('录音开始后可打标')
+                if self.indicator:
+                    self.indicator.flash('error')
         except OSError as exc:
             self._report_error(f'标记未保存：{exc}')
 
@@ -754,6 +855,10 @@ class AudioRecorderApp:
         if self.result_panel.busy:
             self.result_panel.cancel()
         self._closing = True
+        self._start_pending = None
+        if self.indicator:
+            self.indicator.close()
+            self.indicator = None
         self._save_config()
         def close():
             self.controller.cleanup()
@@ -764,11 +869,13 @@ class AudioRecorderApp:
 
     def run(self) -> None:
         """Start application."""
-        from desktop import DesktopControls
+        from desktop import DesktopControls, RecordingIndicator
+        self.root.withdraw()
+        self.indicator = RecordingIndicator(self.root)
         self.desktop = DesktopControls(self._post, self._show_window, self._toggle_recording,
             self._add_marker, self._open_review, self._exit, self._report_error)
         if self.desktop.start():
-            self.root.withdraw()
             self.desktop.set_detail('右键设置 · Alt+R 开始/停止，Alt+M 打标')
-        self._refresh_windows()
+        else:
+            self.root.deiconify()
         self.root.mainloop()

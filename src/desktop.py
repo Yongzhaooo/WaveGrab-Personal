@@ -7,6 +7,75 @@ from PIL import Image, ImageDraw
 import pystray
 
 
+class RecordingIndicator:
+    """Small click-through status dot above the primary taskbar; never activates."""
+    def __init__(self, root):
+        import tkinter as tk
+        self.root, self.state, self.timer = root, '就绪', None
+        self.window = tk.Toplevel(root)
+        self.window.withdraw()
+        self.window.title('WaveGrab · 状态')
+        self.window.overrideredirect(True)
+        self.window.configure(background='#010203')
+        self.window.attributes('-transparentcolor', '#010203')
+        self.canvas = tk.Canvas(self.window, width=20, height=20, background='#010203',
+                                highlightthickness=0, takefocus=False)
+        self.canvas.pack()
+        self.dot = self.canvas.create_oval(5, 5, 15, 15, fill='#ce6464', outline='')
+        self.window.update_idletasks()
+        user = ctypes.windll.user32
+        user.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
+        user.GetAncestor.restype = wintypes.HWND
+        user.GetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user.GetWindowLongPtrW.restype = ctypes.c_ssize_t
+        user.SetWindowLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_ssize_t]
+        user.SetWindowLongPtrW.restype = ctypes.c_ssize_t
+        self.hwnd = user.GetAncestor(self.window.winfo_id(), 2)
+        style = user.GetWindowLongPtrW(self.hwnd, -20)
+        user.SetWindowLongPtrW(self.hwnd, -20, style | 0x08000000 | 0x80 | 0x20)
+
+    def _paint(self, color, ring=False):
+        rect = wintypes.RECT()
+        ctypes.windll.user32.SystemParametersInfoW(0x30, 0, ctypes.byref(rect), 0)
+        self.window.geometry(f'20x20+{max(0, rect.right - 30)}+{max(0, rect.bottom - 30)}')
+        self.canvas.itemconfigure(self.dot, fill='' if ring else color, outline=color, width=2)
+        self.window.deiconify()
+        user = ctypes.windll.user32
+        user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user.SetWindowPos(self.hwnd, wintypes.HWND(-1), 0, 0, 0, 0, 0x13)
+
+    def update(self, state):
+        previous, self.state = self.state, state
+        if self.timer:
+            self.root.after_cancel(self.timer)
+            self.timer = None
+        if state == '录音中':
+            self._paint('#ce6464')
+        elif state in ('已暂停', '保存中', '准备中'):
+            self._paint('#c39a48', ring=state == '已暂停')
+        elif previous in ('录音中', '已暂停', '保存中'):
+            self.flash('saved')
+        else:
+            self.window.withdraw()
+
+    def flash(self, event):
+        if self.timer:
+            self.root.after_cancel(self.timer)
+        self._paint('#3e9a89' if event in ('marker', 'saved') else '#c39a48', ring=event == 'marker')
+        self.timer = self.root.after(1100, self._restore)
+
+    def _restore(self):
+        self.timer = None
+        self.update(self.state)
+
+    def close(self):
+        if self.timer:
+            self.root.after_cancel(self.timer)
+            self.timer = None
+        self.window.destroy()
+
+
 class DesktopControls:
     def __init__(self, post, show, toggle, mark, review, quit_app, report):
         self.post, self.report = post, report
