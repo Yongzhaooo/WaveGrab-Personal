@@ -55,11 +55,11 @@ VB-CABLE 是单独安装的非开源 donationware 驱动，不随本项目打包
 
 ## 本地转录环境
 
-当前使用 faster-whisper small 多语言模型（CPU int8）和 sherpa-onnx 说话人分段。无需付费 API 或账户；首次下载模型需要网络，音频处理在本机进行。较长会议在 CPU 上可能较慢。
+当前使用 faster-whisper small 多语言模型（CPU int8），以及 pyannote 分段、WeSpeaker ResNet34-LM 声纹与谱聚类。人数默认自动估计，短促或无法可靠归类的发言保留为未知。无需付费 API 或账户；首次下载模型需要网络，音频处理在本机进行。较长会议在 CPU 上可能较慢。
 
 从源码安装：运行 `Setup-Transcription.cmd`。它在 `dist/.runtime` 安装独立 Python 环境，在 `dist/models` 下载模型。需要本机 Python 3.12 或 3.13。录音 EXE 旁边的 `_internal` 是必需组件；本地转录还需要 `.runtime` 与 `models`。Python 虚拟环境不应直接搬到另一台电脑，换电脑请从源码重新运行安装脚本。
 
-模型来源：[sherpa-onnx segmentation](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-segmentation-models)、[3D-Speaker embedding](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models)、[faster-whisper small](https://huggingface.co/Systran/faster-whisper-small)。模型缓存与录音不提交 Git。
+模型来源：[sherpa-onnx segmentation](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-segmentation-models)、[WeSpeaker embedding](https://github.com/k2-fsa/sherpa-onnx/releases/tag/speaker-recongition-models)、[faster-whisper small](https://huggingface.co/Systran/faster-whisper-small)。谱聚类参考 [WeSpeaker recipe](https://github.com/wenet-e2e/wespeaker/blob/master/wespeaker/diar/spectral_clusterer.py)，许可见 [Apache-2.0](licenses/WeSpeaker-Apache-2.0.txt)。模型缓存与录音不提交 Git。已有安装升级时重新运行 `Setup-Transcription.cmd`，补充 SciPy 与新版声纹模型；原模型缓存不覆盖。
 
 ## 从源码运行或打包
 
@@ -78,6 +78,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe selfcheck.py
 .\.venv\Scripts\python.exe -m unittest test_transcripts -v
 .\.venv\Scripts\python.exe -m unittest test_visuals -v
+.\dist\.runtime\Scripts\python.exe -m unittest test_diarization -v
 ```
 
 这些检查覆盖录音保存、会议室模式、转录结果保护、改名/清洗导出、截图边界与压缩、标记和托盘 UI 状态，不开启麦克风或实际捕获桌面。

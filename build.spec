@@ -14,6 +14,8 @@ a = Analysis(
     datas=[
         ('assets', 'assets'),  # Include assets folder
         ('src/transcribe_worker.py', '.'),
+        ('src/speaker_diarization.py', '.'),
+        ('licenses', 'licenses'),
     ],
     hiddenimports=[
         'pyaudiowpatch',

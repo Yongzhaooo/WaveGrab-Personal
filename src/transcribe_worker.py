@@ -10,7 +10,8 @@ import urllib.request
 SEGMENT_URL = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/'
                'speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2')
 EMBED_URL = ('https://github.com/k2-fsa/sherpa-onnx/releases/download/'
-             'speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx')
+             'speaker-recongition-models/wespeaker_en_voxceleb_resnet34_LM.onnx')
+EMBED_NAME = 'embedding-wespeaker-resnet34-lm.onnx'
 
 
 def progress(message):
@@ -28,7 +29,7 @@ def download(url, destination):
 def prepare_models(folder):
     folder.mkdir(parents=True, exist_ok=True)
     segmentation = folder / 'segmentation.onnx'
-    embedding = folder / 'embedding.onnx'
+    embedding = folder / EMBED_NAME
     if not segmentation.exists():
         progress('下载说话人分段模型…')
         archive = folder / 'segmentation.tar.bz2'
@@ -71,7 +72,8 @@ def speaker_for_interval(start, end, turns):
 def align_words(words, turns):
     # shortcut: scan turns per word; use an interval index if multi-hour meetings make this material.
     mapping = {speaker: f'speaker_{i + 1}' for i, speaker in
-               enumerate(dict.fromkeys(t['speaker'] for t in sorted(turns, key=lambda x: x['start'])))}
+               enumerate(dict.fromkeys(t['speaker'] for t in sorted(turns, key=lambda x: x['start'])
+                                       if t['speaker'] not in ('unknown', 'overlap')))}
     output = []
     for word in words:
         speaker = speaker_for_interval(word['start'], word['end'], turns)
@@ -104,26 +106,14 @@ def main():
         return
     if not args.output or args.output.exists():
         raise ValueError('输出路径缺失或已经存在')
-    import sherpa_onnx
+    from speaker_diarization import diarize
     from faster_whisper import WhisperModel
     from faster_whisper.audio import decode_audio
     audio = decode_audio(str(args.audio), sampling_rate=16000)
     if not len(audio):
         raise ValueError('音频没有可读取的采样')
     progress('正在区分说话人…')
-    config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
-        segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
-            pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(segmentation)),
-            num_threads=2, provider='cpu'),
-        embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding), num_threads=2, provider='cpu'),
-        clustering=sherpa_onnx.FastClusteringConfig(num_clusters=args.speakers or -1, threshold=.5),
-        min_duration_on=.3, min_duration_off=.5)
-    if not config.validate():
-        raise ValueError('说话人模型配置无效')
-    diarizer = sherpa_onnx.OfflineSpeakerDiarization(config)
-    turns = [{'start': t.start, 'end': t.end, 'speaker': t.speaker}
-             for t in diarizer.process(audio).sort_by_start_time()]
-    del diarizer
+    turns = diarize(audio, segmentation, embedding, args.speakers, progress)
     progress('正在转录文字…')
     model = WhisperModel(str(asr), device='cpu', compute_type='int8', cpu_threads=4)
     segments, info = model.transcribe(audio, word_timestamps=True, vad_filter=True,
@@ -135,8 +125,9 @@ def main():
             words.append({'start': segment.start, 'end': segment.end, 'text': segment.text})
         progress(f'已转录 {segment.end:.0f} / {len(audio) / 16000:.0f} 秒')
     result = {'schema_version': 1, 'audio_file': args.audio.name, 'language': info.language,
-              'engine': 'faster-whisper small int8 + sherpa-onnx pyannote/3D-Speaker',
+              'engine': 'faster-whisper small int8 + pyannote/WeSpeaker ResNet34-LM spectral',
               'speaker_count_requested': args.speakers, 'turns': turns,
+              'words': words,
               'segments': align_words(words, turns)}
     with args.output.open('x', encoding='utf-8') as file:
         json.dump(result, file, ensure_ascii=False, indent=2)

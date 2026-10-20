@@ -80,6 +80,13 @@ class TranscriptTests(unittest.TestCase):
         boundary = align_words([{'start': .8, 'end': 1.3, 'text': 'boundary'}], turns)
         self.assertEqual(boundary[0]['speaker'], 'speaker_2')
 
+    def test_unknown_voice_is_not_renamed_as_a_person(self):
+        words = [{'start': 0, 'end': 1, 'text': 'Uncertain'},
+                 {'start': 2, 'end': 3, 'text': 'Known'}]
+        turns = [{'start': 0, 'end': 1, 'speaker': 'unknown'},
+                 {'start': 2, 'end': 3, 'speaker': 8}]
+        self.assertEqual([s['speaker'] for s in align_words(words, turns)], ['unknown', 'speaker_1'])
+
     def test_gui_names_and_edits_refresh_all_rows_without_devices(self):
         from config import AppConfig
         from gui.app import AudioRecorderApp
