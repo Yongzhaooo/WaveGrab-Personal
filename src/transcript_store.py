@@ -218,7 +218,7 @@ def validate_summary(summary, segments):
             or not isinstance(summary.get('source_ids'), list) or not summary['source_ids']
             or any(not isinstance(ident, str) or ident not in ids for ident in summary['source_ids'])):
         raise ValueError('总结为空或引用了不存在的片段；原稿保留')
-    if any(s not in speakers for s in re.findall(r'\{\{([^{}]+)\}\}', summary['markdown'])):
+    if any(s not in speakers for s in re.findall(r'\{\{([^{}]+)\}\}', summary['markdown'] + summary['notes'])):
         raise ValueError('总结引用了不存在的说话人')
     return summary
 
@@ -244,9 +244,11 @@ def export_result(folder):
     summary = read_json(folder / SUMMARY)
     if summary is not None:
         validate_summary(summary, data['segments'])
-        text = re.sub(r'\{\{([^{}]+)\}\}', lambda m: md(names.get(m[1]) or default_name(m[1])), summary['markdown'])
-        rendered['summary.md'] = text.strip() + '\n'
-        rendered['summary-notes.md'] = '# 总结核对说明\n\nAGY 生成，原始转录保留；本次技能与依据见 cleanup-runs。\n\n' + summary['notes'] + '\n'
+        speaker = lambda text: re.sub(r'\{\{([^{}]+)\}\}', lambda m: md(names.get(m[1]) or default_name(m[1])), text)
+        rendered['summary.md'] = speaker(summary['markdown']).strip() + '\n'
+        origin = ('外部 agent 导入，原始转录保留。' if summary.get('generator') == 'external-agent'
+                  else 'AGY 生成，原始转录保留；本次技能与依据见 cleanup-runs。')
+        rendered['summary-notes.md'] = f'# 总结核对说明\n\n{origin}\n\n' + speaker(summary['notes']) + '\n'
     for name, content in rendered.items():
         atomic_text(folder / 'exports' / name, content)
     stale = [] if edits else ['transcript.clean.md']

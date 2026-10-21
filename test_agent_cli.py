@@ -59,6 +59,20 @@ class AgentCliTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, '--replace'):
             clean(self.folder, {}, replace=False)
 
+    def test_imported_notes_render_speaker_names_and_origin(self):
+        (self.folder / 'speakers.json').write_text('{"speaker_2": "Alice"}', encoding='utf-8')
+        self.input.write_text(json.dumps({'markdown': '{{speaker_2}} 会合并', 'source_ids': ['seg_00001'],
+                                          'notes': '归属：{{speaker_2}}'}), encoding='utf-8')
+        self.assertEqual(self.run_cli('import-summary', self.folder.name, '--file', str(self.input))[0], 0)
+        notes = (self.folder / 'exports/summary-notes.md').read_text(encoding='utf-8')
+        self.assertIn('外部 agent 导入', notes)
+        self.assertNotIn('AGY', notes)
+        self.assertIn('归属：Alice', notes)
+        self.assertIn('Alice 会合并', (self.folder / 'exports/summary.md').read_text(encoding='utf-8'))
+        self.input.write_text(json.dumps({'markdown': '笔记', 'source_ids': ['seg_00001'],
+                                          'notes': '{{speaker_9}}'}), encoding='utf-8')
+        self.assertEqual(self.run_cli('import-summary', self.folder.name, '--file', str(self.input), '--replace')[0], 1)
+
     def test_busy_recording_lock_and_path_escape_are_rejected(self):
         with session_lock(self.folder):
             self.assertEqual(self.run_cli('import-summary', self.folder.name, '--file', str(self.input))[0], 1)
