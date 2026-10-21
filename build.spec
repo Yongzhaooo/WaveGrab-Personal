@@ -18,6 +18,8 @@ a = Analysis(
         ('assets', 'assets'),  # Include assets folder
         ('src/transcribe_worker.py', '.'),
         ('src/speaker_diarization.py', '.'),
+        ('src/cleanup.py', '.'),
+        ('src/transcript_store.py', '.'),
         ('licenses', 'licenses'),
     ],
     hiddenimports=[

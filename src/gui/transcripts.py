@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 from handoff import clipboard_prompt
+from cleanup import start_cleanup
 from paths import get_base_path, get_exe_dir, get_src_path, is_frozen
 from transcript_store import (RAW, default_name, edit_segment, export_result, install_result,
                               load_edits, load_names, load_result, rename_speaker, speaker_ids, timestamp)
@@ -337,6 +338,7 @@ class TranscriptPanel(ttk.Frame):
                         if code != 0:
                             raise RuntimeError(last_line or f'处理退出码 {code}，详情见 transcription.log')
                         install_result(folder, json.loads(result.read_text(encoding='utf-8')))
+                        start_cleanup(folder)
         except Exception as exc:
             error = str(exc)
         finally:

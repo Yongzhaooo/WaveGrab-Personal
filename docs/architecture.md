@@ -46,6 +46,12 @@ Windows 桌面程序保留现有 WASAPI 录音链路。浅色界面分为“录�
 
 ## Approach
 
+文字清洗由独立 `cleanup.py` 进程负责，GUI 在成功安装转录后启动，录音记录页也可重试。每场用 OS 文件锁避免重复任务，锁随进程释放；状态文件和日志供界面读取。用户选择复用本机 AGY CLI 登录，无头模式通过 stdin 传入材料，默认权限、不自动批准工具，不改 AGY 登录或全局设置。
+
+清洗逐批生成最多三个术语查询，再由本地知识库脚本以 `current-work / exact_fts / company_sensitive_allowed` 检索，完整保留返回的来源、权威等级及警告。随后 AGY 按原片段 ID 返回文字，校验不漏段、不改 ID 后保存到 `transcript.agy.json`，人工 `transcript.edits.json` 始终优先。时间戳和说话人由原始结果决定，导出复用现有管线。清洗稿标为 AI 草稿，提示、检索证据与响应留在会话的 `cleanup-runs/`，失败保留旧结果。模型语义正确性仍需人工核对。
+
+本机路径和已登录的 CLI 模型在便携程序旁 `cleanup-config.json` 配置，独立于录音配置；不纳入 Git。打包附带清洗脚本和共享转录存储模块。无原数据迁移；禁用清洗不影响本地录音和转录。
+
 选用 faster-whisper 的本地 CPU int8 转录。说话人链路由 `speaker_diarization.py` 实现：ONNX Runtime 执行 pyannote segmentation，10 秒窗口、5 秒步长；sherpa-onnx 提取 WeSpeaker ResNet34-LM 的 VoxCeleb 声纹；SciPy 执行 WeSpeaker 的近邻图谱聚类，以特征值间隙估计人数，或采用用户填写的已知人数。自动模式搜索 1–20 组，不把本次用户估计的 5 人写死为通用人数。
 
 至少 1.5 秒的非重叠语音参与建立声纹组，至少 0.5 秒的语音可尝试归类；与声纹中心距离过大或两个候选过近时标为未知。重叠窗口投票还原时间段，不把每个短声纹直接当作新人。少量发言者仍可能遗漏，未知标记不是完整人数统计。新版取代原来的中文 CAMPPlus 声纹与 complete-linkage 固定阈值聚类；后者在用户实际会议中过度分裂。仅新增 SciPy，保持 CPU 本地推理，无 Torch/WhisperX 运行时。新版声纹使用独立缓存文件名，保留旧缓存。

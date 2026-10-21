@@ -19,6 +19,7 @@ dist/
 
 # Local config
 config.json
+cleanup-config.json
 
 # Environment
 .env

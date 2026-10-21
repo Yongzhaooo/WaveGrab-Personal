@@ -171,7 +171,11 @@ def load_names(folder, data):
 
 
 def load_edits(folder, data):
-    edits = read_json(Path(folder) / 'transcript.edits.json', {})
+    auto = read_json(Path(folder) / 'transcript.agy.json', {})
+    manual = read_json(Path(folder) / 'transcript.edits.json', {})
+    if not isinstance(auto, dict) or not isinstance(auto.get('edits', {}), dict) or not isinstance(manual, dict):
+        raise ValueError('清洗结果格式无效')
+    edits = {**auto.get('edits', {}), **manual}
     ids = {s['id'] for s in data['segments']}
     if not isinstance(edits, dict) or any(k not in ids or not isinstance(v, str) for k, v in edits.items()):
         raise ValueError('transcript.edits.json 必须将现有片段 ID 映射到清洗后的文字')
@@ -221,6 +225,8 @@ def export_result(folder):
             render_markdown({**data, 'segments': review}, names, edits))
     if edits:
         rendered['transcript.clean.md'] = render_markdown(view, names, edits)
+        if (folder / 'transcript.agy.json').exists():
+            rendered['transcript.clean.md'] = '> AGY 清洗草稿，待核对。原始转录保留；依据与疑点见 cleanup-notes.md。\n\n' + rendered['transcript.clean.md']
     for name, content in rendered.items():
         atomic_text(folder / 'exports' / name, content)
     stale = [] if edits else ['transcript.clean.md']
@@ -271,7 +277,8 @@ def edit_segment(folder, ident, text):
     data = load_result(folder)
     if ident not in {s['id'] for s in data['segments']}:
         raise ValueError('找不到发言片段')
-    edits = load_edits(folder, data)
+    load_edits(folder, data)
+    edits = read_json(Path(folder) / 'transcript.edits.json', {})
     edits[ident] = text.strip()
     atomic_text(Path(folder) / 'transcript.edits.json', json_text(edits))
     return export_result(folder)

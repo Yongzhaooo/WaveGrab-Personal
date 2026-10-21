@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 from transcript_store import (RAW, edit_segment, export_result, install_result, load_names,
@@ -48,6 +48,25 @@ class TranscriptTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             install_result(self.folder, {'schema_version': 1, 'segments': []})
         self.assertEqual((self.folder / RAW).read_bytes(), before)
+
+    def test_successful_worker_starts_cleanup_only_after_install(self):
+        from gui.transcripts import TranscriptPanel
+        import threading
+        folder = self.folder / 'new-recording'
+        folder.mkdir()
+        panel = Mock()
+        panel.cancelled = threading.Event()
+        def launch(command, **kwargs):
+            Path(command[command.index('--output') + 1]).write_text(json.dumps(SAMPLE), encoding='utf-8')
+            process = Mock(stdout=[])
+            process.wait.return_value = 0
+            return process
+        def clean(target):
+            self.assertEqual(load_result(target), SAMPLE)
+        with patch('gui.transcripts.subprocess.Popen', side_effect=launch), patch('gui.transcripts.start_cleanup', side_effect=clean) as cleanup:
+            TranscriptPanel._run(panel, Path(sys.executable), Path('worker.py'), folder, folder, folder / 'mixed.flac', 0)
+        cleanup.assert_called_once_with(folder)
+        self.assertIsNone(panel.process)
 
     def test_imported_cleaning_updates_named_exports(self):
         (self.folder / 'transcript.edits.json').write_text(json.dumps({'seg_00002': '清洗后的中文'}), encoding='utf-8')
