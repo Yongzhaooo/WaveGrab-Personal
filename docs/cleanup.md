@@ -1,6 +1,8 @@
-# 自动清洗
+# 自动会议总结
 
-转录完成后，WaveGrab 启动独立后台清洗进程。录音记录页的“清洗 / 重试”可处理已有转录；“音频位置”和“清洗稿位置”在资源管理器中选中文件，不播放声音。
+转录完成后，WaveGrab 启动独立后台整理进程，将 humanizer 完整指令交给 AGY，按主题合并输出一篇中文会议总结。短录音直接成稿，长会议先分批提取讨论与结论，再合并成一份总结。明确的待办、责任人和期限随总结保留，不编造缺失项。
+
+录音记录页的“生成总结 / 重试”可处理已有转录；“音频位置”和“总结位置”在资源管理器中选中文件，不播放声音。
 
 在便携程序旁创建 `cleanup-config.json`（本机配置，不提交 Git）：
 
@@ -11,7 +13,8 @@
   "agy": "<已登录的 AGY CLI 可执行文件>",
   "model": "gemini-3.8-flash-medium",
   "knowledge_root": "<Ka-zar / 共享工程知识库根目录>",
-  "knowledge_python": "<知识库 Python 可执行文件>"
+  "knowledge_python": "<知识库 Python 可执行文件>",
+  "humanizer_skill": "<已安装 humanizer 的 SKILL.md 绝对路径>"
 }
 ```
 
@@ -22,10 +25,12 @@
 每场保存：
 
 - `transcript.raw.json` / `transcript.raw.md`：原始识别，保持不变。
-- `transcript.agy.json`：AI 清洗文字、疑点和本次依据位置。
-- `transcript.edits.json`：人工校正，优先于 AI；改名继续使用 `speakers.json`。
-- `exports/transcript.clean.md`：按当前场景、名称与人工校正生成的清洗草稿。
-- `exports/cleanup-notes.md`：术语依据与不确定项。
+- `meeting.summary.json`：总结正文、支撑片段 ID、核对说明和依据位置。
+- `transcript.edits.json`：人工校正，生成总结时优先采用；改名继续使用 `speakers.json`。
+- `exports/summary.md`：一篇按主题合并的会议总结，必要的说话人引用随改名更新。
+- `exports/summary-notes.md`：术语依据与不确定项。
 - `cleanup.status.json` / `cleanup.log` / `cleanup-runs/`：运行状态、故障与逐批输入、检索、响应证据。
 
-关闭界面不取消清洗；睡眠/退出系统可能中断任务，可从记录页重试。OS 文件锁避免同一场重复处理。失败不替换已有 AI 文字；原稿始终保留。切换主要说话人或修改人工文字后可重新清洗；运行中发生这些变化，本次结果留在依据目录，提示重试。每批逐段校验 ID 和非空文字，不把结构通过等同于事实准确，草稿仍需核对。
+关闭界面不取消整理；睡眠/退出系统可能中断任务，可从记录页重试。OS 文件锁避免同一场重复处理。失败不替换已有总结；原稿始终保留。切换主要说话人或修改人工文字后可重新生成；运行中发生这些变化，本次结果留在依据目录，提示重试。校验总结非空、引用片段及说话人存在，不把结构通过等同于事实准确。
+
+既有逐段 AI 校对结果和人工编辑不迁移、不删除，总结入口固定指向 `summary.md`。humanizer 缺失时明确失败，不能默默跳过用户选择的技能。

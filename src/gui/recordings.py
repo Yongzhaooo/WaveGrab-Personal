@@ -46,11 +46,11 @@ class RecordingsPanel(ttk.Frame):
         files.pack(fill='x', pady=(0, 8))
         self.audio_btn = ttk.Button(files, text='音频位置', command=self.open_audio, state='disabled')
         self.audio_btn.pack(side='left')
-        self.clean_btn = ttk.Button(files, text='清洗稿位置', command=self.open_clean, state='disabled')
+        self.clean_btn = ttk.Button(files, text='总结位置', command=self.open_clean, state='disabled')
         self.clean_btn.pack(side='left', padx=8)
-        self.cleanup_btn = ttk.Button(files, text='清洗 / 重试', command=self.clean_selected, state='disabled')
+        self.cleanup_btn = ttk.Button(files, text='生成总结 / 重试', command=self.clean_selected, state='disabled')
         self.cleanup_btn.pack(side='left')
-        self.cleanup_text = tk.StringVar(value='转录完成后自动清洗')
+        self.cleanup_text = tk.StringVar(value='转录完成后自动总结')
         ttk.Label(files, textvariable=self.cleanup_text, style='Muted.TLabel').pack(side='left', padx=12)
         editor = ttk.Frame(footer)
         editor.pack(fill='x')
@@ -86,11 +86,11 @@ class RecordingsPanel(ttk.Frame):
         folder = self.folder
         state = cleanup_status(folder) if folder else {}
         self.audio_btn.configure(state='normal' if folder and self.audio_path() else 'disabled')
-        self.clean_btn.configure(state='normal' if folder and (folder / 'exports/transcript.clean.md').exists() else 'disabled')
+        self.clean_btn.configure(state='normal' if folder and (folder / 'exports/summary.md').exists() else 'disabled')
         row = self.rows.get(str(folder), {})
         can_clean = folder and (folder / RAW).exists() and row.get('state') != 'recording' and not row.get('audio_warning')
         self.cleanup_btn.configure(state='normal' if can_clean and state.get('state') != 'running' else 'disabled')
-        self.cleanup_text.set(LABELS.get(state.get('state'), '转录完成后自动清洗'))
+        self.cleanup_text.set(LABELS.get(state.get('state'), '转录完成后自动总结'))
 
     def audio_path(self):
         if self.folder:
@@ -112,7 +112,7 @@ class RecordingsPanel(ttk.Frame):
 
     def open_clean(self):
         if self.folder:
-            self.reveal(self.folder / 'exports/transcript.clean.md')
+            self.reveal(self.folder / 'exports/summary.md')
 
     def clean_selected(self):
         if self.folder and self.save():

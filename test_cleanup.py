@@ -9,7 +9,7 @@ from unittest.mock import patch, Mock
 
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
 import cleanup
-from transcript_store import (RAW, edit_segment, install_result, load_edits, load_result,
+from transcript_store import (RAW, SUMMARY, edit_segment, install_result, load_edits, load_result,
                               read_json, rename_speaker, save_details)
 from test_recordings import SAMPLE
 
@@ -20,13 +20,17 @@ class CleanupTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.folder = Path(self.temp.name)
         install_result(self.folder, copy.deepcopy(SAMPLE))
-        self.config = {'model': 'test-model'}
+        skill = self.folder / 'humanizer.md'
+        skill.write_text('HUMANIZER_FIXTURE: write natural prose.', encoding='utf-8')
+        self.config = {'model': 'test-model', 'humanizer_skill': str(skill)}
 
     def response(self, config, prompt, schema, work, evidence):
         if 'queries' in schema['properties']:
             return {'queries': ['BLQ']}
         segments = json.loads(prompt.split('SOURCE:\n', 1)[1].split('\nKNOWLEDGE:', 1)[0])
-        return {'segments': [{'id': s['id'], 'text': s['text'] + ' cleaned'} for s in segments], 'notes': '保留疑点。'}
+        self.assertIn('HUMANIZER_FIXTURE', prompt)
+        return {'markdown': '# 讨论总结\n\n{{speaker_1}} 讨论了主要事项。',
+                'source_ids': [s['id'] for s in segments], 'notes': '保留疑点。'}
 
     def test_cleanup_preserves_originals_desk_scope_and_manual_priority(self):
         raw = (self.folder / RAW).read_bytes()
@@ -35,7 +39,7 @@ class CleanupTests(unittest.TestCase):
         search = Mock(return_value=[{'warning': 'unreviewed', 'source': 'test'}])
         cleanup.clean(self.folder, self.config, call=self.response, search=search)
         search.assert_called_once_with(self.config, ['BLQ'])
-        auto = read_json(self.folder / cleanup.AUTO)['edits']
+        auto = read_json(self.folder / SUMMARY)['source_ids']
         self.assertNotIn('seg_00003', auto)
         self.assertIn('seg_00004', auto)
         self.assertEqual((self.folder / RAW).read_bytes(), raw)
@@ -43,22 +47,23 @@ class CleanupTests(unittest.TestCase):
         edit_segment(self.folder, 'seg_00001', '新的人工校正')
         self.assertEqual(set(read_json(self.folder / 'transcript.edits.json')), {'seg_00001', 'seg_00002'})
         rename_speaker(self.folder, 'speaker_1', '同事甲')
-        text = (self.folder / 'exports/transcript.clean.md').read_text(encoding='utf-8')
+        text = (self.folder / 'exports/summary.md').read_text(encoding='utf-8')
         self.assertIn('同事甲', text)
-        self.assertIn('新的人工校正', text)
+        self.assertNotIn('00:00:', text)
+        self.assertFalse((self.folder / 'transcript.agy.json').exists())
         self.assertEqual(cleanup.cleanup_status(self.folder)['state'], 'complete')
 
-    def test_missing_segment_rejected_without_replacing_previous_draft(self):
+    def test_invalid_summary_rejected_without_replacing_previous_draft(self):
         cleanup.clean(self.folder, self.config, call=self.response, search=lambda *_: [])
-        before = (self.folder / cleanup.AUTO).read_bytes()
+        before = (self.folder / SUMMARY).read_bytes()
         def bad(*args):
             answer = self.response(*args)
-            if 'segments' in answer:
-                answer['segments'].pop()
+            if 'markdown' in answer:
+                answer['source_ids'] = ['invented_id']
             return answer
-        with self.assertRaisesRegex(ValueError, '漏段'):
+        with self.assertRaisesRegex(ValueError, '不存在'):
             cleanup.clean(self.folder, self.config, call=bad, search=lambda *_: [])
-        self.assertEqual((self.folder / cleanup.AUTO).read_bytes(), before)
+        self.assertEqual((self.folder / SUMMARY).read_bytes(), before)
         self.assertEqual(cleanup.cleanup_status(self.folder)['state'], 'failed')
 
     def test_no_text_never_calls_agy_and_duplicate_worker_is_blocked(self):
@@ -85,7 +90,29 @@ class CleanupTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'KB unavailable'):
             cleanup.clean(self.folder, self.config, call=self.response, search=Mock(side_effect=RuntimeError('KB unavailable')))
         self.assertEqual(cleanup.cleanup_status(self.folder)['state'], 'failed')
-        self.assertFalse((self.folder / cleanup.AUTO).exists())
+        self.assertFalse((self.folder / SUMMARY).exists())
+
+    def test_long_meeting_merges_batches_into_one_summary(self):
+        calls = []
+        def call(config, prompt, schema, work, evidence):
+            calls.append(evidence.name)
+            if evidence.name == 'merged-summary':
+                self.assertIn('HUMANIZER_FIXTURE', prompt)
+                self.assertIn('seg_00001', prompt)
+                self.assertIn('seg_00005', prompt)
+                return {'markdown': '# 整场总结\n\n两个话题合并后的结论。',
+                        'source_ids': ['seg_00001', 'seg_00005'], 'notes': ''}
+            return self.response(config, prompt, schema, work, evidence)
+        with patch('cleanup.batches', return_value=[SAMPLE['segments'][:2], SAMPLE['segments'][2:]]):
+            # Each fixture batch must use an attribution present in that batch.
+            def respond(*args):
+                result = call(*args)
+                if 'markdown' in result:
+                    result['markdown'] = result['markdown'].replace('{{speaker_1}}', '现场人员')
+                return result
+            cleanup.clean(self.folder, self.config, call=respond, search=lambda *_: [])
+        self.assertEqual(calls[-1], 'merged-summary')
+        self.assertIn('两个话题合并后的结论', (self.folder / 'exports/summary.md').read_text(encoding='utf-8'))
 
     def test_streamed_cli_requires_success_and_uses_stdin(self):
         good = {'status': 'SUCCESS', 'structured_output': {'queries': []}}

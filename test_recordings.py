@@ -83,12 +83,12 @@ class RecordingTests(unittest.TestCase):
             with patch('gui.recordings.subprocess.Popen') as reveal:
                 panel.open_audio()
                 reveal.assert_called_once_with(['explorer.exe', '/select,', str(audio)])
-            (self.folder / 'exports/transcript.clean.md').write_text('clean', encoding='utf-8')
+            (self.folder / 'exports/summary.md').write_text('summary', encoding='utf-8')
             panel.update_files()
             self.assertEqual(str(panel.clean_btn['state']), 'normal')
             with patch('gui.recordings.subprocess.Popen') as reveal:
                 panel.open_clean()
-                self.assertEqual(reveal.call_args.args[0][-1], str(self.folder / 'exports/transcript.clean.md'))
+                self.assertEqual(reveal.call_args.args[0][-1], str(self.folder / 'exports/summary.md'))
             panel.note.insert('1.0', 'Desk note')
             panel.scene.set('Desk · 主要对话')
             panel.save()

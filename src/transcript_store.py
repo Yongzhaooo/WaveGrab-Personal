@@ -9,6 +9,7 @@ import tempfile
 from datetime import datetime
 
 RAW = 'transcript.raw.json'
+SUMMARY = 'meeting.summary.json'
 DETAILS = 'recording.json'
 SCENES = {'meeting': '会议 · 保留全部发言', 'desk': 'Desk · 主要对话'}
 
@@ -209,6 +210,19 @@ def render_markdown(data, names, edits=None):
     return '\n'.join(lines)
 
 
+def validate_summary(summary, segments):
+    ids = {s['id'] for s in segments}
+    speakers = {s['speaker'] for s in segments}
+    if (not isinstance(summary, dict) or not isinstance(summary.get('markdown'), str)
+            or not summary['markdown'].strip() or not isinstance(summary.get('notes'), str)
+            or not isinstance(summary.get('source_ids'), list) or not summary['source_ids']
+            or any(not isinstance(ident, str) or ident not in ids for ident in summary['source_ids'])):
+        raise ValueError('总结为空或引用了不存在的片段；原稿保留')
+    if any(s not in speakers for s in re.findall(r'\{\{([^{}]+)\}\}', summary['markdown'])):
+        raise ValueError('总结引用了不存在的说话人')
+    return summary
+
+
 def export_result(folder):
     folder = Path(folder)
     data = load_result(folder)
@@ -227,6 +241,12 @@ def export_result(folder):
         rendered['transcript.clean.md'] = render_markdown(view, names, edits)
         if (folder / 'transcript.agy.json').exists():
             rendered['transcript.clean.md'] = '> AGY 清洗草稿，待核对。原始转录保留；依据与疑点见 cleanup-notes.md。\n\n' + rendered['transcript.clean.md']
+    summary = read_json(folder / SUMMARY)
+    if summary is not None:
+        validate_summary(summary, data['segments'])
+        text = re.sub(r'\{\{([^{}]+)\}\}', lambda m: md(names.get(m[1]) or default_name(m[1])), summary['markdown'])
+        rendered['summary.md'] = text.strip() + '\n'
+        rendered['summary-notes.md'] = '# 总结核对说明\n\nAGY + humanizer 生成，原始转录保留。\n\n' + summary['notes'] + '\n'
     for name, content in rendered.items():
         atomic_text(folder / 'exports' / name, content)
     stale = [] if edits else ['transcript.clean.md']
