@@ -21,6 +21,7 @@ from visuals import window_status, write_review
 from meeting import MeetingScene, detect_scene
 from .widgets import WaveformCanvas, LevelMeter, OverlayProgress, COLORS, apply_light_theme
 from .transcripts import TranscriptPanel
+from .recordings import RecordingsPanel
 from .controller import RecordingController, RecordingCallbacks, RecordingState
 
 
@@ -143,6 +144,9 @@ class AudioRecorderApp:
             lambda: self.controller.last_session if self.controller.state in (
                 RecordingState.RECORDING, RecordingState.PAUSED, RecordingState.SAVING) else None)
         self.tabs.add(self.result_panel, text='  转录与说话人  ')
+        self.recordings_panel = RecordingsPanel(self.tabs, lambda: self.output_folder_var.get(), self._open_transcript)
+        self.tabs.insert(1, self.recordings_panel, text='  录音记录  ')
+        self.tabs.bind('<<NotebookTabChanged>>', self._on_tab_changed)
         title_row = ttk.Frame(page)
         title_row.pack(fill='x', pady=(0, 4))
         ttk.Label(title_row, text='主题', width=9).pack(side='left')
@@ -671,6 +675,8 @@ class AudioRecorderApp:
             self.result_panel.set_folder(path)
         self.config.last_session = str(path)
         self._save_config()
+        if self.tabs.select() == str(self.recordings_panel):
+            self.recordings_panel.refresh()
         if self._last_error:
             self._report_error(self._last_error)
         else:
@@ -719,6 +725,21 @@ class AudioRecorderApp:
         self.config.last_filename = self.filename_var.get()
 
         save_config(self.config)
+
+    def _on_tab_changed(self, _=None):
+        if self.tabs.select() == str(self.recordings_panel):
+            self.recordings_panel.refresh()
+        elif self.recordings_panel.folder:
+            self.recordings_panel.save(refresh_people=False)
+        if self.tabs.select() == str(self.result_panel) and self.result_panel.data and not self.result_panel.busy:
+            self.result_panel.reload()
+
+    def _open_transcript(self, folder):
+        if self.result_panel.busy:
+            self.recordings_panel.status.set('另一段录音正在转录，请等待完成或先取消。')
+            return
+        self.result_panel.set_folder(folder)
+        self.tabs.select(self.result_panel)
 
     def _latest_folder(self):
         return self.controller.last_session or (Path(self.config.last_session) if self.config.last_session else None)
@@ -840,6 +861,8 @@ class AudioRecorderApp:
 
     def _hide_window(self):
         if self.desktop and self.desktop.ready.is_set():
+            if not self.recordings_panel.save(refresh_people=False):
+                return
             self._save_config()
             self.root.withdraw()
 
@@ -852,6 +875,7 @@ class AudioRecorderApp:
     def _exit(self):
         if self._closing:
             return
+        self.recordings_panel.save(refresh_people=False)
         if self.result_panel.busy:
             self.result_panel.cancel()
         self._closing = True

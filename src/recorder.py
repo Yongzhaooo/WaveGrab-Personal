@@ -365,8 +365,8 @@ class Recorder:
                    if config and not self.source_frames[name]]
         if missing:
             return '、'.join(missing) + '未收到音频采样；请确认设备选择和播放状态。'
-        if self.mic_config and self.source_peaks['mic'] == 0:
-            return '麦克风采样全为零，可能被硬件或 Windows 静音，或没有输入。请检查麦克风；本程序不会自动解除静音。'
+        if self.mic_config and self.source_peaks['mic'] <= 1:
+            return '麦克风采样全为零或只有量化底噪，没有可用声音。请检查麦克风；本程序不会自动解除静音。'
         return ''
 
     @property

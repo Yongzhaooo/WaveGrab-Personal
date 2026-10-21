@@ -89,6 +89,23 @@ def align_words(words, turns):
     return output
 
 
+def speaker_statistics(audio, segments, rate=16000):
+    import numpy as np
+    totals = {}
+    for segment in segments:
+        speaker = segment['speaker']
+        if not speaker.startswith('speaker_'):
+            continue
+        samples = audio[int(segment['start'] * rate):int(segment['end'] * rate)]
+        if not len(samples):
+            continue
+        energy, count = totals.get(speaker, (0., 0))
+        totals[speaker] = (energy + float(np.dot(samples.astype('float64'), samples)), count + len(samples))
+    return {speaker: {'speech_seconds': count / rate,
+                      'rms_db': float(10 * np.log10(max(energy / count, 1e-12)))}
+            for speaker, (energy, count) in totals.items()}
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--models', required=True, type=Path)
@@ -124,11 +141,17 @@ def main():
         if not segment.words and segment.text.strip():
             words.append({'start': segment.start, 'end': segment.end, 'text': segment.text})
         progress(f'已转录 {segment.end:.0f} / {len(audio) / 16000:.0f} 秒')
+    aligned = align_words(words, turns)
+    import numpy as np
+    peak = float(np.max(np.abs(audio)))
+    warning = ('音频接近数字静音，没有可用语音；请检查录音来源。' if peak <= 1 / 32768 else
+               '未识别到语音，请检查原始录音。') if not aligned else ''
     result = {'schema_version': 1, 'audio_file': args.audio.name, 'language': info.language,
               'engine': 'faster-whisper small int8 + pyannote/WeSpeaker ResNet34-LM spectral',
               'speaker_count_requested': args.speakers, 'turns': turns,
               'words': words,
-              'segments': align_words(words, turns)}
+              'segments': aligned, 'speaker_stats': speaker_statistics(audio, aligned),
+              'audio_warning': warning}
     with args.output.open('x', encoding='utf-8') as file:
         json.dump(result, file, ensure_ascii=False, indent=2)
     progress('转录完成')

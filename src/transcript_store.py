@@ -6,8 +6,11 @@ import os
 from pathlib import Path
 import re
 import tempfile
+from datetime import datetime
 
 RAW = 'transcript.raw.json'
+DETAILS = 'recording.json'
+SCENES = {'meeting': '会议 · 保留全部发言', 'desk': 'Desk · 主要对话'}
 
 
 def read_json(path, default=None):
@@ -30,6 +33,89 @@ def atomic_text(path, text):
 
 def json_text(data):
     return json.dumps(data, ensure_ascii=False, indent=2) + '\n'
+
+
+def load_details(folder):
+    data = read_json(Path(folder) / DETAILS, {})
+    if not isinstance(data, dict):
+        raise ValueError('录音备注格式无效')
+    data = {'note': '', 'scene': 'meeting', 'focus_speakers': None, **data}
+    if not isinstance(data['note'], str) or len(data['note']) > 2000 or not isinstance(data['scene'], str) or data['scene'] not in SCENES:
+        raise ValueError('录音备注或场景无效（备注最多 2000 字）')
+    focus = data['focus_speakers']
+    if focus is not None and (not isinstance(focus, list) or any(
+            not isinstance(s, str) or not re.fullmatch(r'speaker_\d+', s) for s in focus)):
+        raise ValueError('主要说话人选择无效')
+    return data
+
+
+def save_details(folder, **changes):
+    if set(changes) - {'note', 'scene', 'focus_speakers'}:
+        raise ValueError('不支持的录音设置')
+    data = {**load_details(folder), **changes}
+    # Validate before replacing an existing annotation.
+    if not isinstance(data['note'], str) or len(data['note']) > 2000 or not isinstance(data['scene'], str) or data['scene'] not in SCENES:
+        raise ValueError('备注最多 2000 字，场景须为会议或 Desk')
+    focus = data['focus_speakers']
+    if focus is not None:
+        result = load_result(folder)
+        if not isinstance(focus, list) or any(s not in speaker_ids(result) for s in focus):
+            raise ValueError('请选择当前录音中的说话人')
+    atomic_text(Path(folder) / DETAILS, json_text(data))
+    return data
+
+
+def list_recordings(root):
+    root = Path(root)
+    if not root.is_dir():
+        return []
+    rows = []
+    for folder in root.iterdir():
+        if not folder.is_dir() or not (folder / 'session.json').exists():
+            continue
+        try:
+            session = read_json(folder / 'session.json')
+            details = load_details(folder)
+            seconds = float(session.get('duration_seconds', 0))
+            seconds = seconds if math.isfinite(seconds) and seconds >= 0 else 0
+            state = session.get('status', 'unknown')
+            summary = read_json(folder / 'transcription.status.json', {})
+            warning = summary.get('audio_warning', '') if isinstance(summary, dict) else ''
+        except (OSError, ValueError, TypeError, AttributeError):
+            details = {'note': '信息无法读取，请打开文件夹查看', 'scene': 'meeting'}
+            seconds, state, warning = 0, 'unreadable', ''
+        try:
+            date = datetime.strptime(folder.name[:17], '%Y-%m-%d_%H%M%S').strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            date = folder.name
+        rows.append(dict(folder=folder, date=date, seconds=seconds, state=state,
+                         transcribed=(folder / RAW).exists(), audio_warning=warning,
+                         note=details['note'], scene=details['scene']))
+    return sorted(rows, key=lambda row: row['date'], reverse=True)
+
+
+def focused_result(folder, data):
+    details = load_details(folder)
+    ids = speaker_ids(data)
+    if details['scene'] == 'meeting':
+        return data, [], ids
+    chosen = details['focus_speakers']
+    if chosen is None:
+        durations = {s: sum(t['end'] - t['start'] for t in data['segments'] if t['speaker'] == s) for s in ids}
+        stats = data.get('speaker_stats', {})
+        def score(speaker):
+            item = stats.get(speaker, {}) if isinstance(stats, dict) else {}
+            db = item.get('rms_db', 0) if isinstance(item, dict) else 0
+            db = db if isinstance(db, (float, int)) and math.isfinite(db) else 0
+            # shortcut: loudness and duration suggest foreground voices; user can correct the selection.
+            return math.sqrt(max(durations[speaker], 0)) * 10 ** (max(-120, min(0, db)) / 20)
+        chosen = sorted(ids, key=score, reverse=True)[:2]
+    if any(s not in ids for s in chosen):
+        raise ValueError('主要说话人不属于当前转录，请重新选择')
+    # Uncertain speech may be the quiet colleague; only known, unselected identities are excluded.
+    kept = [s for s in data['segments'] if s['speaker'] in chosen or s['speaker'] in ('unknown', 'overlap')]
+    excluded = [s for s in data['segments'] if s['speaker'].startswith('speaker_') and s['speaker'] not in chosen]
+    return {**data, 'segments': kept}, excluded, chosen
 
 
 def validate_result(data):
@@ -109,7 +195,8 @@ def render_markdown(data, names, edits=None):
     edits = edits or {}
     lines = ['# 会议转录', '', '']
     if edits:
-        lines[1] = f'已清洗 {len(edits)} / {len(data["segments"])} 个片段；其余保留识别原文。'
+        count = sum(s['id'] in edits for s in data['segments'])
+        lines[1] = f'已清洗 {count} / {len(data["segments"])} 个片段；其余保留识别原文。'
     for item in data['segments']:
         name = names.get(item['speaker']) or default_name(item['speaker'])
         lines.extend([f'### [{timestamp(item["start"])}–{timestamp(item["end"])}] {md(name)}',
@@ -122,21 +209,35 @@ def export_result(folder):
     folder = Path(folder)
     data = load_result(folder)
     names, edits = load_names(folder, data), load_edits(folder, data)
-    rendered = {'transcript.md': render_markdown(data, names)}
+    view, excluded, _ = focused_result(folder, data)
+    rendered = {'transcript.md': render_markdown(view, names), 'transcript.srt': render_srt(view, names, edits)}
+    desk = load_details(folder)['scene'] == 'desk'
+    if desk:
+        rendered['transcript.full.md'] = render_markdown(data, names, edits)
+        rendered['transcript.full.srt'] = render_srt(data, names, edits)
+        review = sorted(excluded + [s for s in data['segments'] if s['speaker'] in ('unknown', 'overlap')], key=lambda s: s['start'])
+        rendered['transcript.review.md'] = ('# 背景候选与待核对发言\n\n'
+            '未选中的已知声纹已从正文排除；未知与重叠可能包含主要对话，仍保留在正文，并在这里列出待核对。\n\n' +
+            render_markdown({**data, 'segments': review}, names, edits))
+    if edits:
+        rendered['transcript.clean.md'] = render_markdown(view, names, edits)
+    for name, content in rendered.items():
+        atomic_text(folder / 'exports' / name, content)
+    stale = [] if edits else ['transcript.clean.md']
+    if not desk:
+        stale += ['transcript.full.md', 'transcript.full.srt', 'transcript.review.md']
+    for name in stale:
+        (folder / 'exports' / name).unlink(missing_ok=True)
+    return data, names, edits
+
+
+def render_srt(data, names, edits):
     captions = []
     for i, item in enumerate(data['segments'], 1):
         name = names.get(item['speaker']) or default_name(item['speaker'])
         text = edits.get(item['id'], item['text']).replace('\n', ' ').replace('\r', ' ')
         captions.append(f'{i}\n{timestamp(item["start"], True)} --> {timestamp(item["end"], True)}\n{name}: {text}\n')
-    rendered['transcript.srt'] = '\n'.join(captions)
-    if edits:
-        rendered['transcript.clean.md'] = render_markdown(data, names, edits)
-    for name, content in rendered.items():
-        atomic_text(folder / 'exports' / name, content)
-    if not edits:
-        # This exact file is a derived export; never delete original transcripts.
-        (folder / 'exports' / 'transcript.clean.md').unlink(missing_ok=True)
-    return data, names, edits
+    return '\n'.join(captions)
 
 
 def install_result(folder, data):
@@ -148,6 +249,8 @@ def install_result(folder, data):
         file.write(json_text(data))
     with (folder / 'transcript.raw.md').open('x', encoding='utf-8') as file:
         file.write(render_markdown(data, {}))
+    atomic_text(folder / 'transcription.status.json', json_text({
+        'segments': len(data['segments']), 'audio_warning': data.get('audio_warning', '')}))
     export_result(folder)
 
 

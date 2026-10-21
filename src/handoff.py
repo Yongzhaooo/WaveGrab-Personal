@@ -54,6 +54,10 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
 
 ## 处理请求（适用于 Codex、agy 或其他工具）
 
+先读 `recording.json`（如有）的备注和文字场景。会议模式保留所有发言；Desk 模式的
+`exports/transcript.md` 是主要对话，`transcript.review.md` 是背景候选及待核对内容，
+`transcript.full.md` 保留完整文字。未知或重叠可能包含主要对话，不能据此直接丢弃。
+
 1. 先转录音频，保留原语言、中英混说、术语及时间戳；无法听清标注时间点，不猜测。
 2. 把原始转录保存为 `transcript.raw.md`。
 3. 清理口头填充、无意义重复和明显识别错误，按话题分段，保存为 `transcript.clean.md`。
@@ -78,7 +82,9 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
 
 def clipboard_prompt(folder: Path) -> str:
     return (f'请处理这个录音文件夹：{folder.resolve()}\n'
-            '先阅读 HANDOFF.md（如果存在）。已有 transcript.raw.json 时复用其片段 ID、时间和说话人，'
+            '先阅读 HANDOFF.md 和 recording.json（如果存在），遵循备注与会议/Desk 场景。'
+            'Desk 优先处理 exports/transcript.md，结合 transcript.review.md 核对背景候选；原稿全部保留。'
+            '已有 transcript.raw.json 时复用其片段 ID、时间和说话人，'
             '参考 speakers.json 的会议内名称，将清洗后的文字写入 transcript.edits.json '
             '（片段 ID 到文字的 JSON 对象，保留已有编辑）。没有转录时先转录。'
             '不修改原始音频、原始识别结果或说话人归属；不编造听不清的内容。')

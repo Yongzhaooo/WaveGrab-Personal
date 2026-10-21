@@ -20,6 +20,10 @@ def cluster_embeddings(embeddings, speakers=0):
     x = x / norms
     if len(x) <= 2 and not speakers:
         return np.zeros(len(x), dtype=int)
+    if len(x) < 50 and not speakers:
+        from scipy.cluster.hierarchy import linkage, fcluster
+        # Ten neighbors swamp minority voices in short clips; keep distinct voices for later selection.
+        return fcluster(linkage(x, method='average', metric='cosine'), .3, criterion='distance') - 1
     similarity = x @ x.T
     graph = np.zeros_like(similarity)
     neighbors = np.argsort(similarity, axis=1)[:, -min(10, len(x)):]

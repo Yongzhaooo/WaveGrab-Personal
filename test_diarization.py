@@ -29,6 +29,23 @@ class DiarizationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             cluster_embeddings([[1., 0.]], 2)
 
+    def test_short_clip_does_not_swamp_the_less_frequent_voice(self):
+        rng = np.random.default_rng(7)
+        x = np.vstack([np.tile([1., 0., 0.], (13, 1)), np.tile([0., 1., 0.], (6, 1))])
+        x += rng.normal(0, .02, x.shape)
+        labels = cluster_embeddings(x)
+        self.assertEqual(len(set(labels)), 2)
+        self.assertEqual(len(set(labels[:13])), 1)
+        self.assertEqual(len(set(labels[13:])), 1)
+
+    def test_voice_energy_statistics_use_aligned_speech(self):
+        from transcribe_worker import speaker_statistics
+        audio = np.r_[np.full(100, .1), np.full(100, .01)]
+        stats = speaker_statistics(audio, [{'start': 0., 'end': 1., 'speaker': 'speaker_1'},
+                                           {'start': 1., 'end': 2., 'speaker': 'speaker_2'}], rate=100)
+        self.assertAlmostEqual(stats['speaker_1']['rms_db'] - stats['speaker_2']['rms_db'], 20.)
+        self.assertEqual(stats['speaker_1']['speech_seconds'], 1.)
+
     def test_ambiguous_or_unrelated_voice_stays_unknown(self):
         centers = [[1., 0., 0.], [0., 1., 0.]]
         labels = assign_embeddings([[1., .05, 0.], [.05, 1., 0.], [1., 1., 0.],

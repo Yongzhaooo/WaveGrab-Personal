@@ -30,6 +30,8 @@ VB-CABLE 是单独安装的非开源 donationware 驱动，不随本项目打包
 
 **转录与说话人**：录音保存后进入此页，也可打开已有音频文件夹。选择音频，人数填 0 自动判断，或填写已知人数，然后点“转录并区分说话人”。处理期间可以取消，原音频保留。
 
+**录音记录**：按日期浏览录音、写备注、选择“会议 / Desk”文字场景，再直接查看或转录。会议保留全部发言；Desk 自动建议两个主要声纹，也可手动改选。正文排除其他已知声纹，完整稿和背景候选/待核对稿另存；未知和重叠仍保留正文，避免误删主要对话。勾选“显示全部”可检查全部内容。此设置不改变录音设备。
+
 默认启用“自动识别 Teams 会议”：按 Alt+R 后，确认单个会议窗口及 Teams 的 VB-CABLE 输出会话时自动录双路并选择会议窗口；否则使用会议室模式。没有截图目标也能录音。可取消自动识别后手动选择模式。程序不改变 Teams 或系统声音设置。
 
 后台录音时，屏幕右下角任务栏上方有小红点；Alt+M 成功打标后短暂变成绿色空心点。暂停为琥珀色空心，保存完成后小点消失。小点不抢焦点或拦截鼠标；未录音时按 Alt+M 短闪琥珀色。
@@ -83,6 +85,7 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m unittest test_transcripts -v
 .\.venv\Scripts\python.exe -m unittest test_visuals -v
 .\.venv\Scripts\python.exe -m unittest test_meeting -v
+.\.venv\Scripts\python.exe -m unittest test_recordings -v
 .\dist\.runtime\Scripts\python.exe -m unittest test_diarization -v
 ```
 

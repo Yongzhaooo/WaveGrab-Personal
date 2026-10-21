@@ -14,6 +14,7 @@ from handoff import clipboard_prompt
 from paths import get_base_path, get_exe_dir, get_src_path, is_frozen
 from transcript_store import (RAW, default_name, edit_segment, export_result, install_result,
                               load_edits, load_names, load_result, rename_speaker, speaker_ids, timestamp)
+from transcript_store import focused_result, load_details, SCENES
 
 
 class TranscriptPanel(ttk.Frame):
@@ -46,6 +47,13 @@ class TranscriptPanel(ttk.Frame):
         self.count_spin.pack(side='left')
         self.start_btn = ttk.Button(options, text='转录并区分说话人', style='Accent.TButton', command=self.start)
         self.start_btn.pack(side='right')
+        scope = ttk.Frame(self)
+        scope.pack(fill='x', pady=(0, 6))
+        self.scope_text = tk.StringVar(value='会议 · 保留全部发言')
+        ttk.Label(scope, textvariable=self.scope_text, style='Muted.TLabel').pack(side='left')
+        self.show_all = tk.BooleanVar(value=False)
+        ttk.Checkbutton(scope, text='显示全部（含背景候选）', variable=self.show_all,
+                        command=self.reload).pack(side='right')
         progress_row = ttk.Frame(self)
         progress_row.pack(fill='x', pady=(0, 12))
         ttk.Label(progress_row, textvariable=self.status, style='Muted.TLabel').pack(side='left')
@@ -117,6 +125,13 @@ class TranscriptPanel(ttk.Frame):
         self.audio_var.set('mixed.flac' if 'mixed.flac' in files else files[0] if files else '')
         self.data, self.names, self.edits = None, {}, {}
         self.tree.delete(*self.tree.get_children())
+        self.show_all.set(False)
+        try:
+            self.scope_text.set(SCENES[load_details(self.folder)['scene']] + ' · 在“录音记录”中设置主要说话人')
+        except (OSError, ValueError) as exc:
+            self.status.set('录音设置无法读取：' + str(exc))
+            self._controls()
+            return
         self.speaker_combo['values'] = []
         self.speaker_var.set('')
         self.name_var.set('')
@@ -130,8 +145,12 @@ class TranscriptPanel(ttk.Frame):
             return
         try:
             self.data, self.names, self.edits = export_result(self.folder)
+            view, excluded, _ = focused_result(self.folder, self.data)
+            scene = load_details(self.folder)['scene']
+            self.scope_text.set(SCENES[scene] + ' · 在“录音记录”中设置主要说话人')
+            shown = self.data if self.show_all.get() else view
             self.tree.delete(*self.tree.get_children())
-            for segment in self.data['segments']:
+            for segment in shown['segments']:
                 self.tree.insert('', 'end', iid=segment['id'], values=(
                     f'{timestamp(segment["start"])}–{timestamp(segment["end"])}',
                     self.names.get(segment['speaker']) or default_name(segment['speaker']),
@@ -141,7 +160,10 @@ class TranscriptPanel(ttk.Frame):
             if self.speaker_var.get() not in self._speaker_lookup:
                 self.speaker_var.set(next(iter(self._speaker_lookup), ''))
             self.select_speaker()
-            self.status.set(f'{len(speaker_ids(self.data))} 位说话人 · {len(self.data["segments"])} 段发言 · 已导出 Markdown / SRT')
+            self.status.set(f'{len(speaker_ids(shown))} 个说话人标签 · 显示 {len(shown["segments"])} 段'
+                           + (f' · {len(excluded)} 段另存待核对稿' if scene == 'desk' else '') + ' · 已导出 Markdown / SRT')
+            if not self.data['segments']:
+                self.status.set(self.data.get('audio_warning') or '未识别到语音，请检查原始录音。')
         except Exception as exc:
             self.status.set(f'结果未刷新：{exc}；原始录音和识别结果保留。')
         self._controls()

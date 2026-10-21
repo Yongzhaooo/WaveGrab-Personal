@@ -106,7 +106,7 @@ def main():
         from gui.app import AudioRecorderApp
         with patch('gui.app.get_devices', return_value=[speaker, microphone]), \
              patch('gui.app.get_default_devices', return_value=(10, 11)), \
-             patch('gui.app.load_config', return_value=AppConfig()):
+             patch('gui.app.load_config', return_value=AppConfig(auto_mode=False)):
             app = AudioRecorderApp()
             app.root.withdraw()
             try:
