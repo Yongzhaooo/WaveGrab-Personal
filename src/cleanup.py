@@ -134,9 +134,11 @@ def retrieve(config, queries):
     return results
 
 
-def clean(folder, config, call=ask_agy, search=retrieve):
+def clean(folder, config, call=ask_agy, search=retrieve, replace=True):
     folder = Path(folder)
     with session_lock(folder):
+        if not replace and (folder / SUMMARY).exists():
+            raise ValueError('已有总结；重新生成请明确传入 --replace')
         try:
             set_status(folder, 'running', '正在准备清洗')
             if read_json(folder / 'session.json', {}).get('status') == 'recording':

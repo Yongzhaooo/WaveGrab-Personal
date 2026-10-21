@@ -1,6 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 import os
+import shutil
 from comtypes.client import GetModule
 
 GetModule('UIAutomationCore.dll')
@@ -19,6 +20,7 @@ a = Analysis(
         ('src/transcribe_worker.py', '.'),
         ('src/speaker_diarization.py', '.'),
         ('src/cleanup.py', '.'),
+        ('src/agent_cli.py', '.'),
         ('src/transcript_store.py', '.'),
         ('licenses', 'licenses'),
     ],
@@ -78,3 +80,5 @@ exe = EXE(
 
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False,
                name='WaveGrab-Personal')
+shutil.copy2(os.path.join(BASE_PATH, 'WaveGrab-Agent.cmd'),
+             os.path.join(DISTPATH, 'WaveGrab-Personal', 'WaveGrab-Agent.cmd'))

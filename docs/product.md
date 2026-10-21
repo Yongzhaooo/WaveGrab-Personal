@@ -62,6 +62,8 @@ Last confirmed: not yet confirmed
 
 ### 录音文件与通用交接
 
+- 提供 `WaveGrab-Agent.cmd` 本地 JSON 命令行入口：列出录音、查看文件路径、读取按场景筛选的转录、调用现有 AGY 整理，或导入外部 agent 自行生成的笔记。写入复用会话锁与现有导出规则；已有总结须显式选择替换。接口见 [agent-api.md](agent-api.md)。
+
 - 每次录音使用单独文件夹，默认位置是用户的 `Music/WaveGrab`，可在界面修改。
 - 保留 `mixed.flac`、所选来源对应的 `mic.flac` / `system.flac`、`HANDOFF.md` 和 `session.json`。会议室模式不生成系统音轨；其 `mic.flac` 与合成音频均代表本次麦克风录音。
 - `session.json` 记录设备、文件清单、时长、完成状态和错误；部分失败仍保留可用音频及状态说明。

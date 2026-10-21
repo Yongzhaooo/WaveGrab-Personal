@@ -46,6 +46,8 @@ Windows 桌面程序保留现有 WASAPI 录音链路。浅色界面分为“录�
 
 ## Approach
 
+`agent_cli.py` 提供无 GUI 的本地 JSON 接口，`WaveGrab-Agent.cmd` 使用便携目录现有 Python 运行环境启动。录音根目录取现有配置，录音 ID 限定为根目录下的一场会话。查询复用转录存储模块；AGY 整理复用 `cleanup.clean`；外部 agent 的总结经既有校验和会话锁写入，再通过原导出链路生成界面可见结果。没有新的常驻服务或数据存储。公共命令契约见 [agent-api.md](agent-api.md)。
+
 文字清洗由独立 `cleanup.py` 进程负责，GUI 在成功安装转录后启动，录音记录页也可重试。每场用 OS 文件锁避免重复任务，锁随进程释放；状态文件和日志供界面读取。用户选择复用本机 AGY CLI 登录，无头模式通过 stdin 传入材料，默认权限、不自动批准工具，不改 AGY 登录或全局设置。
 
 总结逐批生成最多三个术语查询，再由本地知识库脚本以 `current-work / exact_fts / company_sensitive_allowed` 检索，完整保留来源、权威等级及警告。AGY 每次收到已配置 transcript-processing 与 humanizer 的完整技能指令；transcript-processing 主导 notes 模式，保留讨论逻辑、澄清、理由和明确行动，humanizer 只润色行文。短录音直接生成总结；长会议分批整理后，再合并为一篇。结果保存在 `meeting.summary.json`，正文和核对说明分别导出到 `exports/summary.md`、`exports/summary-notes.md`。人工校正优先作为输入，原始转录及已有逐段校对保持不变。总结中的说话人采用稳定 ID 占位符，导出时应用当前显示名。结构校验拒绝空正文、无效来源片段及无效说话人；事实与信息覆盖仍须核对。
