@@ -23,12 +23,17 @@ class CleanupTests(unittest.TestCase):
         skill = self.folder / 'humanizer.md'
         skill.write_text('HUMANIZER_FIXTURE: write natural prose.', encoding='utf-8')
         self.config = {'model': 'test-model', 'humanizer_skill': str(skill)}
+        transcript_skill = self.folder / 'transcript-processing.md'
+        transcript_skill.write_text('TRANSCRIPT_FIXTURE: preserve discussion logic.', encoding='utf-8')
+        self.config['transcript_processing_skill'] = str(transcript_skill)
 
     def response(self, config, prompt, schema, work, evidence):
         if 'queries' in schema['properties']:
             return {'queries': ['BLQ']}
         segments = json.loads(prompt.split('SOURCE:\n', 1)[1].split('\nKNOWLEDGE:', 1)[0])
         self.assertIn('HUMANIZER_FIXTURE', prompt)
+        self.assertIn('TRANSCRIPT_FIXTURE', prompt)
+        self.assertIn('notes 模式', prompt)
         return {'markdown': '# 讨论总结\n\n{{speaker_1}} 讨论了主要事项。',
                 'source_ids': [s['id'] for s in segments], 'notes': '保留疑点。'}
 
@@ -98,6 +103,7 @@ class CleanupTests(unittest.TestCase):
             calls.append(evidence.name)
             if evidence.name == 'merged-summary':
                 self.assertIn('HUMANIZER_FIXTURE', prompt)
+                self.assertIn('TRANSCRIPT_FIXTURE', prompt)
                 self.assertIn('seg_00001', prompt)
                 self.assertIn('seg_00005', prompt)
                 return {'markdown': '# 整场总结\n\n两个话题合并后的结论。',

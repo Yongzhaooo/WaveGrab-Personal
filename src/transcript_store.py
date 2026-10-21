@@ -246,7 +246,7 @@ def export_result(folder):
         validate_summary(summary, data['segments'])
         text = re.sub(r'\{\{([^{}]+)\}\}', lambda m: md(names.get(m[1]) or default_name(m[1])), summary['markdown'])
         rendered['summary.md'] = text.strip() + '\n'
-        rendered['summary-notes.md'] = '# 总结核对说明\n\nAGY + humanizer 生成，原始转录保留。\n\n' + summary['notes'] + '\n'
+        rendered['summary-notes.md'] = '# 总结核对说明\n\nAGY 生成，原始转录保留；本次技能与依据见 cleanup-runs。\n\n' + summary['notes'] + '\n'
     for name, content in rendered.items():
         atomic_text(folder / 'exports' / name, content)
     stale = [] if edits else ['transcript.clean.md']
