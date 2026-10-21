@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from datetime import datetime
 import tkinter as tk
 from tkinter import filedialog, ttk
 
@@ -19,7 +20,7 @@ from transcript_store import focused_result, load_details, SCENES
 
 class TranscriptPanel(ttk.Frame):
     def __init__(self, parent, post, active_recording_folder):
-        super().__init__(parent, padding=20)
+        super().__init__(parent, padding=12)
         self.post, self.active_recording_folder = post, active_recording_folder
         self.folder = None
         self.data, self.names, self.edits = None, {}, {}
@@ -31,38 +32,39 @@ class TranscriptPanel(ttk.Frame):
         self.audio_var, self.status = tk.StringVar(), tk.StringVar(value='音频在本机处理')
         self.count = tk.IntVar(value=0)
         self.speaker_var, self.name_var = tk.StringVar(), tk.StringVar()
+        self.heading = tk.StringVar(value='会议文字')
+        self.settings_visible = False
         header = ttk.Frame(self)
-        header.pack(fill='x', pady=(0, 14))
-        ttk.Label(header, text='会议文字', style='Title.TLabel').pack(side='left')
-        self.choose_btn = ttk.Button(header, text='打开录音文件夹', command=self.choose_folder)
-        self.choose_btn.pack(side='right')
-        ttk.Label(self, textvariable=self.path_var, style='Muted.TLabel', wraplength=730).pack(anchor='w')
-        options = ttk.Frame(self)
-        options.pack(fill='x', pady=12)
+        header.pack(fill='x', pady=(0, 6))
+        ttk.Label(header, textvariable=self.heading, font=('Microsoft YaHei UI', 11, 'bold')).pack(side='left')
+        self.settings_btn = ttk.Button(header, text='设置 / 改名 ▾', command=self.toggle_settings)
+        self.settings_btn.pack(side='right')
+        self.show_all = tk.BooleanVar(value=False)
+        ttk.Checkbutton(header, text='显示全部', variable=self.show_all,
+                        command=self.reload).pack(side='right', padx=12)
+        self.settings = ttk.Frame(self)
+        ttk.Label(self.settings, textvariable=self.path_var, style='Muted.TLabel', wraplength=730).pack(anchor='w')
+        options = ttk.Frame(self.settings)
+        options.pack(fill='x', pady=6)
         ttk.Label(options, text='音频').pack(side='left', padx=(0, 6))
-        self.audio_combo = ttk.Combobox(options, textvariable=self.audio_var, state='readonly', width=18)
+        self.audio_combo = ttk.Combobox(options, textvariable=self.audio_var, state='readonly', width=14)
         self.audio_combo.pack(side='left', padx=(0, 14))
         ttk.Label(options, text='人数  0 = 自动').pack(side='left', padx=(0, 6))
         self.count_spin = ttk.Spinbox(options, from_=0, to=50, textvariable=self.count, width=4)
         self.count_spin.pack(side='left')
-        self.start_btn = ttk.Button(options, text='转录并区分说话人', style='Accent.TButton', command=self.start)
+        self.start_btn = ttk.Button(options, text='开始转录', style='Accent.TButton', command=self.start)
         self.start_btn.pack(side='right')
-        scope = ttk.Frame(self)
-        scope.pack(fill='x', pady=(0, 6))
+        self.choose_btn = ttk.Button(options, text='打开录音', command=self.choose_folder)
+        self.choose_btn.pack(side='right', padx=8)
         self.scope_text = tk.StringVar(value='会议 · 保留全部发言')
-        ttk.Label(scope, textvariable=self.scope_text, style='Muted.TLabel').pack(side='left')
-        self.show_all = tk.BooleanVar(value=False)
-        ttk.Checkbutton(scope, text='显示全部（含背景候选）', variable=self.show_all,
-                        command=self.reload).pack(side='right')
+        ttk.Label(self.settings, textvariable=self.scope_text, style='Muted.TLabel').pack(anchor='w', pady=(0, 6))
         progress_row = ttk.Frame(self)
-        progress_row.pack(fill='x', pady=(0, 12))
-        ttk.Label(progress_row, textvariable=self.status, style='Muted.TLabel').pack(side='left')
+        progress_row.pack(side='bottom', fill='x', pady=(6, 0))
+        ttk.Label(progress_row, textvariable=self.status, style='Muted.TLabel', wraplength=650).pack(side='left', fill='x', expand=True)
         self.cancel_btn = ttk.Button(progress_row, text='取消', command=self.cancel, state='disabled')
-        self.cancel_btn.pack(side='right')
         self.progress = ttk.Progressbar(self, mode='indeterminate')
-        names = ttk.Frame(self)
-        self._names_row = names
-        names.pack(fill='x', pady=(0, 12))
+        names = ttk.Frame(self.settings)
+        names.pack(fill='x', pady=(0, 6))
         self.speaker_combo = ttk.Combobox(names, textvariable=self.speaker_var, state='readonly', width=15)
         self.speaker_combo.pack(side='left', padx=(0, 8))
         self.speaker_combo.bind('<<ComboboxSelected>>', self.select_speaker)
@@ -72,8 +74,10 @@ class TranscriptPanel(ttk.Frame):
         self.rename_btn.pack(side='left')
         ttk.Label(names, text='仅当前会议', style='Muted.TLabel').pack(side='right')
         body = ttk.Frame(self)
+        self.body = body
         body.pack(fill='both', expand=True)
-        table = ttk.Frame(body)
+        self.content = ttk.Panedwindow(body, orient='vertical')
+        table = ttk.Frame(self.content)
         self.tree = ttk.Treeview(table, columns=('time', 'speaker', 'text'), show='headings', height=9)
         for key, title, width in [('time', '时间', 155), ('speaker', '说话人', 115), ('text', '发言', 400)]:
             self.tree.heading(key, text=title)
@@ -84,12 +88,18 @@ class TranscriptPanel(ttk.Frame):
         scroll.pack(side='right', fill='y')
         self.tree.bind('<<TreeviewSelect>>', self.show_segment)
         self.tree.bind('<Double-1>', lambda _: self.edit())
-        self.detail = tk.Text(body, height=3, wrap='word', relief='flat', bg='#ffffff', fg='#243141',
+        detail_frame = ttk.Frame(self.content)
+        self.detail = tk.Text(detail_frame, height=4, wrap='word', relief='flat', bg='#ffffff', fg='#243141',
                               font=('Microsoft YaHei UI', 10), padx=10, pady=8, state='disabled')
+        detail_scroll = ttk.Scrollbar(detail_frame, orient='vertical', command=self.detail.yview)
+        self.detail.configure(yscrollcommand=detail_scroll.set)
+        self.detail.pack(side='left', fill='both', expand=True)
+        detail_scroll.pack(side='right', fill='y')
         actions = ttk.Frame(body)
-        actions.pack(side='bottom', fill='x')
-        self.detail.pack(side='bottom', fill='x', pady=(8, 12))
-        table.pack(fill='both', expand=True)
+        actions.pack(side='bottom', fill='x', pady=(6, 0))
+        self.content.pack(fill='both', expand=True)
+        self.content.add(table, weight=3)
+        self.content.add(detail_frame, weight=1)
         self.edit_btn = ttk.Button(actions, text='校正此段', command=self.edit)
         self.edit_btn.pack(side='left', padx=(0, 8))
         self.refresh_btn = ttk.Button(actions, text='刷新结果', command=self.reload)
@@ -99,6 +109,18 @@ class TranscriptPanel(ttk.Frame):
         self.handoff_btn = ttk.Button(actions, text='复制清洗交接', command=self.copy_handoff)
         self.handoff_btn.pack(side='right', padx=8)
         self._controls()
+        self.set_settings_visible(True)
+
+    def toggle_settings(self):
+        self.set_settings_visible(not self.settings_visible)
+
+    def set_settings_visible(self, visible):
+        self.settings_visible = visible
+        if visible:
+            self.settings.pack(fill='x', pady=(0, 6), before=self.body)
+        else:
+            self.settings.pack_forget()
+        self.settings_btn.configure(text='收起设置 ▴' if visible else '设置 / 改名 ▾')
 
     def _controls(self):
         self.choose_btn.configure(state='disabled' if self.busy else 'normal')
@@ -106,6 +128,10 @@ class TranscriptPanel(ttk.Frame):
         self.count_spin.configure(state='disabled' if self.busy else 'normal')
         self.start_btn.configure(state='normal' if self.folder and not self.data and not self.busy else 'disabled')
         self.cancel_btn.configure(state='normal' if self.busy else 'disabled')
+        if self.busy:
+            self.cancel_btn.pack(side='right')
+        else:
+            self.cancel_btn.pack_forget()
         for button in (self.rename_btn, self.edit_btn, self.refresh_btn, self.export_btn):
             button.configure(state='normal' if self.data and not self.busy else 'disabled')
         self.handoff_btn.configure(state='normal' if self.folder and not self.busy else 'disabled')
@@ -120,6 +146,10 @@ class TranscriptPanel(ttk.Frame):
             return
         self.folder = Path(folder).resolve()
         self.path_var.set(str(self.folder))
+        try:
+            self.heading.set(datetime.strptime(self.folder.name[:17], '%Y-%m-%d_%H%M%S').strftime('%m-%d %H:%M') + ' · 会议文字')
+        except ValueError:
+            self.heading.set(self.folder.name[:40])
         files = sorted(p.name for p in self.folder.iterdir() if p.is_file() and p.suffix.lower() in ('.flac', '.wav', '.mp3', '.m4a'))
         self.audio_combo['values'] = files
         self.audio_var.set('mixed.flac' if 'mixed.flac' in files else files[0] if files else '')
@@ -138,6 +168,7 @@ class TranscriptPanel(ttk.Frame):
         self.status.set('准备就绪 · 点击开始后在本机处理')
         if (self.folder / RAW).exists():
             self.reload()
+        self.set_settings_visible(not bool(self.data))
         self._controls()
 
     def reload(self):
@@ -149,12 +180,21 @@ class TranscriptPanel(ttk.Frame):
             scene = load_details(self.folder)['scene']
             self.scope_text.set(SCENES[scene] + ' · 在“录音记录”中设置主要说话人')
             shown = self.data if self.show_all.get() else view
+            selected = self.tree.selection()
             self.tree.delete(*self.tree.get_children())
             for segment in shown['segments']:
                 self.tree.insert('', 'end', iid=segment['id'], values=(
                     f'{timestamp(segment["start"])}–{timestamp(segment["end"])}',
                     self.names.get(segment['speaker']) or default_name(segment['speaker']),
                     self.edits.get(segment['id'], segment['text'])))
+            rows = self.tree.get_children()
+            if rows:
+                self.tree.selection_set(selected[0] if selected and selected[0] in rows else rows[0])
+                self.show_segment()
+            else:
+                self.detail.configure(state='normal')
+                self.detail.delete('1.0', 'end')
+                self.detail.configure(state='disabled')
             self._speaker_lookup = {default_name(s): s for s in speaker_ids(self.data)}
             self.speaker_combo['values'] = list(self._speaker_lookup)
             if self.speaker_var.get() not in self._speaker_lookup:
@@ -257,7 +297,7 @@ class TranscriptPanel(ttk.Frame):
         self.cancelled.clear()
         self._controls()
         self.progress.start(15)
-        self.progress.pack(fill='x', pady=(0, 8), before=self._names_row)
+        self.progress.pack(fill='x', pady=(0, 4), before=self.body)
         self.status.set('正在准备本地模型…')
         script = (get_base_path() if is_frozen() else get_src_path()) / 'transcribe_worker.py'
         threading.Thread(target=self._run, args=(python, script, home, self.folder, audio, count), daemon=True).start()
@@ -313,6 +353,7 @@ class TranscriptPanel(ttk.Frame):
             self.status.set(f'处理未完成 · 原始录音保留：{error}')
         else:
             self.reload()
+            self.set_settings_visible(False)
         self._controls()
 
     def cancel(self):

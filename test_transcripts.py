@@ -108,6 +108,33 @@ class TranscriptTests(unittest.TestCase):
             finally:
                 app.root.destroy()
 
+    def test_existing_transcript_prioritizes_content_and_settings_remain_available(self):
+        from config import AppConfig
+        from gui.app import AudioRecorderApp
+        with patch('gui.app.get_devices', return_value=[]), patch('gui.app.load_config', return_value=AppConfig()):
+            app = AudioRecorderApp()
+        try:
+            panel = app.result_panel
+            panel.set_folder(self.folder)
+            app.tabs.select(panel)
+            app.root.update_idletasks()
+            self.assertFalse(panel.settings_visible)
+            self.assertEqual(panel.settings.winfo_manager(), '')
+            self.assertGreater(panel.body.winfo_height(), panel.winfo_height() * .7)
+            self.assertIn('Speaker 1 is a label.', panel.detail.get('1.0', 'end'))
+            panel.toggle_settings()
+            app.root.update_idletasks()
+            self.assertEqual(panel.settings.winfo_manager(), 'pack')
+            self.assertTrue(panel.rename_btn.winfo_ismapped())
+            self.assertTrue(panel.audio_combo.winfo_ismapped())
+            panel.toggle_settings()
+            panel.busy = True
+            panel._controls()
+            self.assertEqual(panel.cancel_btn.winfo_manager(), 'pack')
+            panel.busy = False
+        finally:
+            app.root.destroy()
+
     def test_virtual_cable_is_available_as_system_source(self):
         from devices import AudioDevice, get_system_sources
         from gui.controller import RecordingController, RecordingCallbacks
