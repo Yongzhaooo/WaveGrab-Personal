@@ -36,7 +36,7 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
 ## 音频
 
 - `mixed.flac`：系统声音和麦克风合成音频，优先用来转录。
-- `system.flac` / `mic.flac`：所选来源的独立无损音轨，可用于听辨重叠语音。
+- `system.flac` / `mic.flac`：双路录制时各来源的独立无损音轨，可用于听辨重叠语音；单一来源时只有 `mixed.flac`。
 - `session.json`：设备、时长和文件信息。
 
 若 session.json 中 system 为 null，此次没有采集系统声音；会议室模式由麦克风收录现场声音及房间音响。
@@ -67,7 +67,7 @@ def write_handoff(folder: Path, title: str, devices: dict, duration: float,
 ## 已有说话人转录时
 
 若存在 `transcript.raw.json`，直接使用其中的稳定片段 ID、说话人 ID 和时间戳。
-`speakers.json` 是本会议内的显示名映射，不跨会议推断人物。
+`speakers.json` 是用户确认的本会议显示名；`speakers.auto.json` 是按本机声纹库自动建议的姓名，确认前标为自动识别。
 清洗文字写入 `transcript.edits.json`，格式为片段 ID 到清洗文字的 JSON 对象，
 例如 `{{"seg_00001": "清洗后的文字"}}`；保留未修改的已有编辑，不修改原始识别文件。
 完成后在程序中点击“刷新结果”，统一生成 `exports/` 下的 Markdown、SRT 和清洗稿。

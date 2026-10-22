@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 
+from storage import ARCHIVE, tidy
 from transcript_store import (SUMMARY, atomic_text, export_result, focused_result, json_text,
                               load_result, read_json, validate_summary)
 
@@ -146,6 +147,7 @@ def clean(folder, config, call=ask_agy, search=retrieve, replace=True):
             segments = selected_segments(folder)
             if not segments or not any(s['text'].strip() for s in segments):
                 set_status(folder, 'skipped', '没有可用转录文字；不会从知识库补写')
+                tidy(folder)
                 return
             runs = folder / 'cleanup-runs'
             runs.mkdir(exist_ok=True)
@@ -194,8 +196,10 @@ def clean(folder, config, call=ask_agy, search=retrieve, replace=True):
                 validate_summary(answer, segments)
             if selected_segments(folder) != segments:
                 raise ValueError('清洗期间原文校正或主要说话人选择发生变化，请重试；本次结果已保留在清洗记录')
-            atomic_text(folder / SUMMARY, json_text({**answer, 'evidence': str(evidence), 'model': config['model']}))
+            atomic_text(folder / SUMMARY, json_text({**answer, 'evidence': f'{ARCHIVE}:{evidence.relative_to(folder).as_posix()}',
+                                                     'model': config['model']}))
             export_result(folder)
+            tidy(folder)
             set_status(folder, 'complete', '会议总结已保存，可打开位置；术语和不确定项见 summary-notes.md')
         except Exception as exc:
             set_status(folder, 'failed', str(exc))

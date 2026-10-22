@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 
 from cleanup import clean, cleanup_status, selected_segments, session_lock
+from storage import tidy
 from transcript_store import (RAW, SUMMARY, atomic_text, export_result, json_text,
                               list_recordings, load_names, load_result, read_json, validate_summary)
 
@@ -74,6 +75,7 @@ def execute(args):
             summary['generator'] = 'external-agent'
             atomic_text(folder / SUMMARY, json_text(summary))
             export_result(folder)
+            tidy(folder)
             atomic_text(folder / 'cleanup.status.json', json_text({
                 'state': 'complete', 'message': 'Agent 笔记已导入', 'generator': 'external-agent'}))
     return describe(folder)

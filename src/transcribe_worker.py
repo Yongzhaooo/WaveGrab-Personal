@@ -142,6 +142,13 @@ def main():
             words.append({'start': segment.start, 'end': segment.end, 'text': segment.text})
         progress(f'已转录 {segment.end:.0f} / {len(audio) / 16000:.0f} 秒')
     aligned = align_words(words, turns)
+    progress('正在保存声纹特征…')
+    try:
+        from speaker_diarization import speaker_embeddings
+        voiceprints = speaker_embeddings(audio, aligned, embedding)
+    except Exception as exc:  # Voiceprints are optional; the transcript is still useful.
+        progress('声纹特征未保存：' + str(exc))
+        voiceprints = {}
     import numpy as np
     peak = float(np.max(np.abs(audio)))
     warning = ('音频接近数字静音，没有可用语音；请检查录音来源。' if peak <= 1 / 32768 else
@@ -151,6 +158,7 @@ def main():
               'speaker_count_requested': args.speakers, 'turns': turns,
               'words': words,
               'segments': aligned, 'speaker_stats': speaker_statistics(audio, aligned),
+              'speaker_embeddings': voiceprints,
               'audio_warning': warning}
     with args.output.open('x', encoding='utf-8') as file:
         json.dump(result, file, ensure_ascii=False, indent=2)

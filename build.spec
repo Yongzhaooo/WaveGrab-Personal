@@ -22,6 +22,8 @@ a = Analysis(
         ('src/cleanup.py', '.'),
         ('src/agent_cli.py', '.'),
         ('src/transcript_store.py', '.'),
+        ('src/storage.py', '.'),
+        ('src/voiceprints.py', '.'),
         ('licenses', 'licenses'),
     ],
     hiddenimports=[

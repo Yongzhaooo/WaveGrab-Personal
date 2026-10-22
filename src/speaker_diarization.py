@@ -73,6 +73,38 @@ def frame_turns(labels, step, offset, duration):
     return sorted(turns, key=lambda t: t['start'])
 
 
+def speaker_embeddings(audio, segments, embedding, rate=16000, limit=180.):
+    """One normalized WeSpeaker voiceprint per labelled speaker, for cross-meeting matching."""
+    import sherpa_onnx
+
+    extractor = sherpa_onnx.SpeakerEmbeddingExtractor(
+        sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding), num_threads=2, provider='cpu'))
+    result = {}
+    for speaker in sorted({s['speaker'] for s in segments if s['speaker'].startswith('speaker_')}):
+        vectors, weights = [], []
+        # Short fragments are often clipped overlaps; long single-speaker segments carry the identity.
+        for item in sorted((s for s in segments if s['speaker'] == speaker and s['end'] - s['start'] >= 1.),
+                           key=lambda s: s['start']):
+            if sum(weights) >= limit:
+                break
+            clip = np.asarray(audio[int(item['start'] * rate):int(item['end'] * rate)], dtype=np.float32)
+            if len(clip) < rate:
+                continue
+            stream = extractor.create_stream()
+            stream.accept_waveform(rate, clip)
+            stream.input_finished()
+            if extractor.is_ready(stream):
+                vector = np.asarray(extractor.compute(stream), dtype=np.float64)
+                if np.isfinite(vector).all() and np.linalg.norm(vector) > 0:
+                    vectors.append(vector / np.linalg.norm(vector))
+                    weights.append(len(clip) / rate)
+        if vectors:
+            mean = np.average(vectors, axis=0, weights=weights)
+            result[speaker] = {'seconds': round(sum(weights), 2),
+                               'vector': [round(float(v), 6) for v in mean / np.linalg.norm(mean)]}
+    return result
+
+
 def diarize(audio, segmentation, embedding, speakers=0, progress=print):
     import onnxruntime as ort
     import sherpa_onnx

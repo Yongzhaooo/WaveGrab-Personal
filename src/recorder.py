@@ -152,8 +152,10 @@ class Recorder:
         self._running = True
 
         try:
+            # A single source is already the mixed track; separate tracks only help dual recording.
+            dual = self.loopback_config and self.mic_config
             for name, config in [('system', self.loopback_config), ('mic', self.mic_config)]:
-                if config and self.track_directory:
+                if config and self.track_directory and dual:
                     writer = AudioWriter(self.track_directory, config.sample_rate,
                                          config.channels, format='FLAC')
                     self._track_writers[name] = writer

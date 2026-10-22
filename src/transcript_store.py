@@ -11,6 +11,9 @@ from datetime import datetime
 RAW = 'transcript.raw.json'
 SUMMARY = 'meeting.summary.json'
 DETAILS = 'recording.json'
+AUTO_NAMES = 'speakers.auto.json'
+AUTO_MARK = '（自动识别）'
+VOICEPRINTS = 'voiceprints.json'
 SCENES = {'meeting': '会议 · 保留全部发言', 'desk': 'Desk · 主要对话'}
 
 
@@ -111,6 +114,9 @@ def focused_result(folder, data):
             # shortcut: loudness and duration suggest foreground voices; user can correct the selection.
             return math.sqrt(max(durations[speaker], 0)) * 10 ** (max(-120, min(0, db)) / 20)
         chosen = sorted(ids, key=score, reverse=True)[:2]
+        owner = owner_speaker(folder, data)
+        if owner and owner not in chosen:
+            chosen = [owner] + chosen[:1]
     if any(s not in ids for s in chosen):
         raise ValueError('主要说话人不属于当前转录，请重新选择')
     # Uncertain speech may be the quiet colleague; only known, unselected identities are excluded.
@@ -162,13 +168,27 @@ def default_name(speaker):
     return 'Speaker ' + speaker.split('_')[-1]
 
 
-def load_names(folder, data):
-    names = read_json(Path(folder) / 'speakers.json', {})
+def _names(path, data):
+    names = read_json(path, {})
     if not isinstance(names, dict) or any(k not in speaker_ids(data) or not isinstance(v, str)
                                           or len(v) > 80 or any(ord(c) < 32 for c in v)
                                           for k, v in names.items()):
-        raise ValueError('speakers.json 的名称映射无效')
+        raise ValueError(f'{path.name} 的名称映射无效')
     return names
+
+
+def load_names(folder, data):
+    """Display names: confirmed names win; voiceprint suggestions stay visibly automatic."""
+    auto = {k: v + AUTO_MARK for k, v in _names(Path(folder) / AUTO_NAMES, data).items()}
+    return {**auto, **_names(Path(folder) / 'speakers.json', data)}
+
+
+def owner_speaker(folder, data):
+    owner = (read_json(Path(folder).parent / VOICEPRINTS, {}) or {}).get('owner', '')
+    if not isinstance(owner, str) or not owner.strip():
+        return None
+    names = {**_names(Path(folder) / AUTO_NAMES, data), **_names(Path(folder) / 'speakers.json', data)}
+    return next((s for s in speaker_ids(data) if names.get(s, '').strip() == owner.strip()), None)
 
 
 def load_edits(folder, data):
@@ -247,7 +267,7 @@ def export_result(folder):
         speaker = lambda text: re.sub(r'\{\{([^{}]+)\}\}', lambda m: md(names.get(m[1]) or default_name(m[1])), text)
         rendered['summary.md'] = speaker(summary['markdown']).strip() + '\n'
         origin = ('外部 agent 导入，原始转录保留。' if summary.get('generator') == 'external-agent'
-                  else 'AGY 生成，原始转录保留；本次技能与依据见 cleanup-runs。')
+                  else 'AGY 生成，原始转录保留；本次技能与依据见 process-archive.zip 中的 cleanup-runs。')
         rendered['summary-notes.md'] = f'# 总结核对说明\n\n{origin}\n\n' + speaker(summary['notes']) + '\n'
     for name, content in rendered.items():
         atomic_text(folder / 'exports' / name, content)
@@ -279,6 +299,11 @@ def install_result(folder, data):
         file.write(render_markdown(data, {}))
     atomic_text(folder / 'transcription.status.json', json_text({
         'segments': len(data['segments']), 'audio_warning': data.get('audio_warning', '')}))
+    try:
+        from voiceprints import apply
+        apply(folder)
+    except Exception:  # Suggestions must never block a finished transcription.
+        pass
     export_result(folder)
 
 
@@ -289,7 +314,7 @@ def rename_speaker(folder, speaker, name):
     name = name.strip()
     if len(name) > 80 or any(ord(c) < 32 for c in name):
         raise ValueError('名称最长 80 个字符，不能包含换行或控制字符')
-    names = load_names(folder, data)
+    names = _names(Path(folder) / 'speakers.json', data)
     names[speaker] = name
     atomic_text(Path(folder) / 'speakers.json', json_text(names))
     return export_result(folder)
