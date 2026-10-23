@@ -170,7 +170,7 @@ class AudioRecorderApp:
         mic_row.pack(fill='x')
         ttk.Label(mic_row, text='麦克风', width=9).pack(side='left')
         self.mic_combo = ttk.Combobox(mic_row, textvariable=self.mic_var,
-            values=self._mic_display_names, state='readonly', width=45)
+            values=self._mic_display_names, state='readonly', width=45, postcommand=self._refresh_devices)
         self.mic_combo.pack(side='left', fill='x', expand=True, padx=(0, 12))
         self.mic_combo.current(0)
         self.mic_combo.bind('<<ComboboxSelected>>', self._on_mic_change)
@@ -189,7 +189,7 @@ class AudioRecorderApp:
         self._system_row.pack(fill='x', pady=(0, 8))
         ttk.Label(self._system_row, text='系统声音', width=9).grid(row=0, column=0, sticky='w')
         self.loopback_combo = ttk.Combobox(self._system_row, textvariable=self.loopback_var,
-            values=self._loopback_display_names, state='readonly', width=45)
+            values=self._loopback_display_names, state='readonly', width=45, postcommand=self._refresh_devices)
         self.loopback_combo.grid(row=0, column=1, sticky='ew', padx=(0, 12))
         self.loopback_combo.current(0)
         self.loopback_combo.bind('<<ComboboxSelected>>', self._on_loopback_change)
@@ -245,17 +245,42 @@ class AudioRecorderApp:
         ttk.Button(actions, text='回看画面与标记', command=self._open_review).pack(side='left')
         ttk.Button(actions, text='查看文字 →', command=lambda: self.tabs.select(self.result_panel)).pack(side='right')
 
+    def _refresh_devices(self):
+        if self.controller.state != RecordingState.IDLE or self._start_pending is not None:
+            return False
+        try:
+            devices = get_devices()
+        except Exception as exc:
+            self.status_var.set(f'设备列表刷新失败：{exc}')
+            return False
+        missing = []
+        for kind, available in (('loopback', get_system_sources(devices)),
+                                ('mic', [d for d in devices if not d.is_loopback])):
+            combo = getattr(self, kind + '_combo')
+            old = getattr(self, 'input_devices' if kind == 'mic' else 'loopback_devices')
+            index = combo.current() - 1
+            selected = old[index] if 0 <= index < len(old) else None
+            names = ['(不录制)'] + [f'{d.name} [{d.sample_rate}Hz]' for d in available]
+            setattr(self, 'input_devices' if kind == 'mic' else 'loopback_devices', available)
+            setattr(self, '_' + kind + '_display_names', names)
+            combo.configure(values=names)
+            matches = [i for i, d in enumerate(available) if selected and
+                       (d.name, d.is_loopback) == (selected.name, selected.is_loopback)]
+            combo.current(matches[0] + 1 if len(matches) == 1 else 0)
+            getattr(self, '_on_' + kind + '_change')(None)
+            if selected and len(matches) != 1:
+                missing.append(selected.name)
+        if missing:
+            self.status_var.set('设备已断开或名称不唯一，请重选：' + '、'.join(missing))
+        return not missing
+
     def _restore_device_selection(self) -> None:
         """Restore device selections from config."""
-        # Loopback - search by name and sample rate
+        # Bluetooth endpoints can change format while keeping the same identity.
         if self.config.loopback_device:
             saved_name = self.config.loopback_device
-            saved_rate = self.config.loopback_sample_rate
             for i, d in enumerate(self.loopback_devices):
-                # Match by name (exact or contained) and sample rate if available
-                name_match = (d.name == saved_name) or (d.name in saved_name)
-                rate_match = (saved_rate == 0) or (d.sample_rate == saved_rate)
-                if name_match and rate_match:
+                if d.name == saved_name:
                     self.loopback_var.set(self._loopback_display_names[i + 1])
                     self._on_loopback_change(None)
                     break
@@ -273,15 +298,11 @@ class AudioRecorderApp:
             self.mic_var.set(self._mic_display_names[selected + 1])
             self._on_mic_change(None)
 
-        # Microphone - search by name and sample rate
+        # Microphone identity is independent of its current sample rate.
         if self.config.mic_device:
             saved_name = self.config.mic_device
-            saved_rate = self.config.mic_sample_rate
             for i, d in enumerate(self.input_devices):
-                # Match by name (exact or contained) and sample rate if available
-                name_match = (d.name == saved_name) or (d.name in saved_name)
-                rate_match = (saved_rate == 0) or (d.sample_rate == saved_rate)
-                if name_match and rate_match:
+                if d.name == saved_name:
                     self.mic_var.set(self._mic_display_names[i + 1])
                     self._on_mic_change(None)
                     break
@@ -442,6 +463,8 @@ class AudioRecorderApp:
             self.test_btn.configure(text="检查输入")
             self.status_var.set("就绪")
         else:
+            if not self._refresh_devices():
+                return
             if self.controller.start_monitoring():
                 self.test_btn.configure(text="停止检查")
                 self.status_var.set("正在检查输入，不播放声音")
@@ -456,6 +479,8 @@ class AudioRecorderApp:
             return
         if self.controller.state == RecordingState.MONITORING:
             self.controller.stop_monitoring()
+        if not self._refresh_devices():
+            return
         if self.auto_mode_var.get():
             self._start_serial += 1
             token = self._start_serial
@@ -856,6 +881,7 @@ class AudioRecorderApp:
             self._report_error('请先停止保存一段新版录音，再打开回看页。')
 
     def _show_window(self):
+        self._refresh_devices()
         self.root.deiconify()
         self.root.lift()
 

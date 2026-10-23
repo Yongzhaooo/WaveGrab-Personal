@@ -99,7 +99,7 @@ def main() -> int:
             device_index=loopback.index,
             channels=loopback.channels,
             sample_rate=loopback.sample_rate,
-            volume=1.0
+            volume=1.0, device_name=loopback.name, is_loopback=loopback.is_loopback
         )
 
     if mic:
@@ -107,7 +107,7 @@ def main() -> int:
             device_index=mic.index,
             channels=mic.channels,
             sample_rate=mic.sample_rate,
-            volume=1.0
+            volume=1.0, device_name=mic.name, is_loopback=mic.is_loopback
         )
 
     # Create recorder and writer

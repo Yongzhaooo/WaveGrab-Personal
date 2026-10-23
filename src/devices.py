@@ -14,10 +14,11 @@ class AudioDevice:
     is_loopback: bool
 
 
-def get_devices() -> list[AudioDevice]:
+def get_devices(p=None) -> list[AudioDevice]:
     """Return list of all available WASAPI devices."""
     devices = []
-    p = pyaudio.PyAudio()
+    owned = p is None
+    p = pyaudio.PyAudio() if owned else p
 
     try:
         wasapi = p.get_host_api_info_by_type(pyaudio.paWASAPI)["index"]
@@ -34,7 +35,8 @@ def get_devices() -> list[AudioDevice]:
                     is_loopback=info.get("isLoopbackDevice", False)
                 ))
     finally:
-        p.terminate()
+        if owned:
+            p.terminate()
 
     return devices
 

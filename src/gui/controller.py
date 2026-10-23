@@ -116,7 +116,8 @@ class RecordingController:
 
     def _make_recorder(self, folder=None):
         def config(device, volume):
-            return StreamConfig(device.index, device.channels, device.sample_rate, volume) if device else None
+            return StreamConfig(device.index, device.channels, device.sample_rate, volume,
+                                device.name, device.is_loopback) if device else None
         return Recorder(config(None if self.room_mode else self._loopback_device, self._loopback_volume),
                         config(self._mic_device, self._mic_volume),
                         target_sample_rate=48000, track_directory=folder)

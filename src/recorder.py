@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pyaudiowpatch as pyaudio
 from writer import AudioWriter
+from devices import get_devices
 
 
 CHUNK_SIZE = 2048
@@ -26,6 +27,17 @@ class StreamConfig:
     channels: int
     sample_rate: int
     volume: float = 1.0
+    device_name: str = ''
+    is_loopback: bool = False
+
+    def resolve(self, devices):
+        if not self.device_name:
+            return
+        matches = [d for d in devices if d.name == self.device_name and d.is_loopback == self.is_loopback]
+        if len(matches) != 1:
+            raise ValueError(f'录音设备不可用或名称不唯一：{self.device_name}；请重新选择设备')
+        device = matches[0]
+        self.device_index, self.channels, self.sample_rate = device.index, device.channels, device.sample_rate
 
 
 @dataclass
@@ -152,6 +164,12 @@ class Recorder:
         self._running = True
 
         try:
+            # PortAudio indices and Bluetooth formats can change after the UI enumeration.
+            configs = [c for c in (self.loopback_config, self.mic_config) if c]
+            if any(c.device_name for c in configs):
+                devices = get_devices(self._pyaudio)
+                for config in configs:
+                    config.resolve(devices)
             # A single source is already the mixed track; separate tracks only help dual recording.
             dual = self.loopback_config and self.mic_config
             for name, config in [('system', self.loopback_config), ('mic', self.mic_config)]:
