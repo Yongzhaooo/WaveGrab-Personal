@@ -21,6 +21,7 @@ class AppConfig:
     """Application configuration."""
     room_mode: bool = True
     auto_mode: bool = True
+    system_only: bool = False
     screenshots_enabled: bool = True
     # Selected devices (by name)
     loopback_device: str = ""

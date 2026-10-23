@@ -45,6 +45,7 @@ class RecordingController:
         self._loopback_device = None
         self._mic_device = None
         self.room_mode = True
+        self.system_only = False
         self._loopback_volume = self._mic_volume = 1.0
         self._output_folder = Path.home() / 'Music' / 'WaveGrab'
         self._filename_prefix = ''
@@ -95,6 +96,18 @@ class RecordingController:
         self.room_mode = bool(enabled)
         return True
 
+    def set_system_only(self, enabled):
+        if self._state != RecordingState.IDLE:
+            return False
+        self.system_only = bool(enabled)
+        if self.system_only:
+            self.room_mode = False
+        return True
+
+    def _capture_devices(self):
+        return {'system': self._loopback_device if self.system_only or not self.room_mode else None,
+                'mic': None if self.system_only else self._mic_device}
+
     def set_loopback_volume(self, volume):
         self._loopback_volume = max(0.0, min(1.0, volume))
         if self._recorder:
@@ -118,8 +131,9 @@ class RecordingController:
         def config(device, volume):
             return StreamConfig(device.index, device.channels, device.sample_rate, volume,
                                 device.name, device.is_loopback) if device else None
-        return Recorder(config(None if self.room_mode else self._loopback_device, self._loopback_volume),
-                        config(self._mic_device, self._mic_volume),
+        devices = self._capture_devices()
+        return Recorder(config(devices['system'], self._loopback_volume),
+                        config(devices['mic'], self._mic_volume),
                         target_sample_rate=48000, track_directory=folder)
 
     def start_monitoring(self):
@@ -137,14 +151,18 @@ class RecordingController:
         if self._state not in (RecordingState.IDLE, RecordingState.MONITORING):
             return False
         self.stop_monitoring()
-        if self.room_mode and not self._mic_device:
+        devices = self._capture_devices()
+        if self.system_only and not devices['system']:
+            self._notify('on_error', '仅系统声音模式需要选择耳机、扬声器回环或虚拟声卡。不会启用麦克风兜底。')
+            return False
+        if self.room_mode and not self.system_only and not devices['mic']:
             self._notify('on_error', '会议室模式需要选择一个麦克风。不会自动启用被系统禁用的设备。')
             return False
-        if (not self.room_mode and self._loopback_device and self._mic_device
-                and self._loopback_device.index == self._mic_device.index):
+        if (devices['system'] and devices['mic']
+                and devices['system'].index == devices['mic'].index):
             self._notify('on_error', '系统声音和麦克风选中了同一设备。请将麦克风选为实际麦克风，避免重复录制。')
             return False
-        if not self._loopback_device and not self._mic_device:
+        if not any(devices.values()):
             self._notify('on_error', '请选择系统声音或麦克风设备。')
             return False
         self._error = ''
@@ -155,8 +173,7 @@ class RecordingController:
                 folder.mkdir(parents=True, exist_ok=False)
                 self.last_session = folder
                 self._session_title = self._filename_prefix
-                self._session_devices = {'system': None if self.room_mode else self._loopback_device,
-                                         'mic': self._mic_device}
+                self._session_devices = devices
                 self._writer = AudioWriter(folder, 48000, 2, format='FLAC')
                 self._writer.start('mixed.flac')
                 write_handoff(folder, self._session_title, self._session_devices, 0, 'recording')

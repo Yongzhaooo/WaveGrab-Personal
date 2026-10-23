@@ -78,6 +78,7 @@ class AudioRecorderApp:
         self.mic_var = tk.StringVar()
         self.room_mode_var = tk.BooleanVar(value=self.config.room_mode)
         self.auto_mode_var = tk.BooleanVar(value=self.config.auto_mode)
+        self.system_only_var = tk.BooleanVar(value=self.config.system_only)
         self.screenshots_var = tk.BooleanVar(value=self.config.screenshots_enabled)
         self.screen_window_var = tk.StringVar(value='开始录音时自动识别会议窗口')
         self.screen_status_var = tk.StringVar(value='只截所选窗口；最小化时暂停截图，录音继续')
@@ -160,6 +161,9 @@ class AudioRecorderApp:
         self.room_mode_check = ttk.Checkbutton(modes, text='会议室模式 · 只录麦克风',
             variable=self.room_mode_var, command=self._on_room_mode_change)
         self.room_mode_check.pack(side='left')
+        self.system_only_check = ttk.Checkbutton(modes, text='仅系统声音 · 不录麦克风',
+            variable=self.system_only_var, command=self._on_room_mode_change)
+        self.system_only_check.pack(side='left', padx=(18, 0))
         self.mode_hint = ttk.Label(page, text='', style='Muted.TLabel', wraplength=780)
         self.mode_hint.pack(anchor='w', pady=(2, 4))
         devices = ttk.Frame(page)
@@ -268,7 +272,7 @@ class AudioRecorderApp:
                        (d.name, d.is_loopback) == (selected.name, selected.is_loopback)]
             combo.current(matches[0] + 1 if len(matches) == 1 else 0)
             getattr(self, '_on_' + kind + '_change')(None)
-            if selected and len(matches) != 1:
+            if selected and len(matches) != 1 and not (kind == 'mic' and self.system_only_var.get()):
                 missing.append(selected.name)
         if missing:
             self.status_var.set('设备已断开或名称不唯一，请重选：' + '、'.join(missing))
@@ -318,18 +322,29 @@ class AudioRecorderApp:
         self.controller.set_filename_prefix(self.filename_var.get())
 
     def _on_room_mode_change(self):
+        if not self.controller.set_system_only(self.system_only_var.get()):
+            self.system_only_var.set(self.controller.system_only)
+            self.room_mode_var.set(self.controller.room_mode)
+            return
+        system_only = self.controller.system_only
+        if system_only:
+            self.auto_mode_var.set(False)
+            self.room_mode_var.set(False)
         if not self.controller.set_room_mode(self.room_mode_var.get()):
             self.room_mode_var.set(self.controller.room_mode)
             return
         room = self.controller.room_mode
         automatic = self.auto_mode_var.get()
-        self.room_mode_check.configure(state='disabled' if automatic else 'normal')
+        self.auto_mode_check.configure(state='disabled' if system_only else 'normal')
+        self.room_mode_check.configure(state='disabled' if automatic or system_only else 'normal')
+        self.mic_combo.configure(state='disabled' if system_only else 'readonly')
         self.loopback_combo.configure(state='readonly' if automatic or not room else 'disabled')
         if room and not automatic:
             self._system_row.pack_forget()
         else:
             self._system_row.pack(fill='x', pady=(0, 8))
         self.mode_hint.configure(text=(
+            '只录所选系统声音；不会打开麦克风。耳机回环或虚拟声卡均可。' if system_only else
             '默认录麦克风；确认 Teams 会议正在使用所选虚拟声卡时，自动录双路及会议窗口。' if automatic else
             '录会议室里的声音；不播放音频，不改变 Teams 静音或 No audio 设置。' if room else
             '录系统输出或虚拟声卡输入，加上实际麦克风；不回放声音。'))
@@ -511,7 +526,8 @@ class AudioRecorderApp:
         self.controller.set_output_folder(self.output_folder_var.get())
         self.controller.set_filename_prefix(self.filename_var.get())
         self.controller.screen_target = None
-        self._recording_detail = scene.detail if scene else ('会议室模式' if self.room_mode_var.get() else '手动双路')
+        self._recording_detail = ('仅系统声音 · 不录麦克风' if self.system_only_var.get() else
+                                 scene.detail if scene else ('会议室模式' if self.room_mode_var.get() else '手动双路'))
         if self.screenshots_var.get():
             if scene is not None:
                 target = scene.target if scene.virtual_audio else None
@@ -569,7 +585,8 @@ class AudioRecorderApp:
     def _update_ui_state(self, state: RecordingState) -> None:
         """Update UI based on state."""
         idle = state == RecordingState.IDLE
-        self.auto_mode_check.configure(state='normal' if idle else 'disabled')
+        self.auto_mode_check.configure(state='normal' if idle and not self.system_only_var.get() else 'disabled')
+        self.system_only_check.configure(state='normal' if idle else 'disabled')
         self.screen_check.configure(state='normal' if idle else 'disabled')
         self.screen_combo.configure(state='readonly' if idle else 'disabled')
         self.screen_refresh.configure(state='normal' if idle else 'disabled')
@@ -582,8 +599,8 @@ class AudioRecorderApp:
             self.indicator.update({RecordingState.IDLE: '就绪', RecordingState.RECORDING: '录音中',
                 RecordingState.PAUSED: '已暂停', RecordingState.MONITORING: '检查输入',
                 RecordingState.SAVING: '保存中'}[state])
-        self.room_mode_check.configure(state='normal' if idle and not self.auto_mode_var.get() else 'disabled')
-        self.mic_combo.configure(state='readonly' if state == RecordingState.IDLE else 'disabled')
+        self.room_mode_check.configure(state='normal' if idle and not self.auto_mode_var.get() and not self.system_only_var.get() else 'disabled')
+        self.mic_combo.configure(state='readonly' if idle and not self.system_only_var.get() else 'disabled')
         self.loopback_combo.configure(state='readonly' if idle and (self.auto_mode_var.get() or not self.room_mode_var.get()) else 'disabled')
         if state == RecordingState.IDLE:
             self.screen_status_var.set('只截所选窗口；最小化时暂停截图，录音继续')
@@ -713,6 +730,7 @@ class AudioRecorderApp:
         """Save current configuration."""
         self.config.room_mode = self.room_mode_var.get()
         self.config.auto_mode = self.auto_mode_var.get()
+        self.config.system_only = self.system_only_var.get()
         self.config.screenshots_enabled = self.screenshots_var.get()
         display_loopback = self.loopback_var.get()
         display_mic = self.mic_var.get()
