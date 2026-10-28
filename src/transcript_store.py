@@ -10,6 +10,7 @@ from datetime import datetime
 
 RAW = 'transcript.raw.json'
 SUMMARY = 'meeting.summary.json'
+PROOFREAD = 'transcript.agy.json'
 DETAILS = 'recording.json'
 AUTO_NAMES = 'speakers.auto.json'
 AUTO_MARK = '（自动识别）'
@@ -192,7 +193,7 @@ def owner_speaker(folder, data):
 
 
 def load_edits(folder, data):
-    auto = read_json(Path(folder) / 'transcript.agy.json', {})
+    auto = read_json(Path(folder) / PROOFREAD, {})
     manual = read_json(Path(folder) / 'transcript.edits.json', {})
     if not isinstance(auto, dict) or not isinstance(auto.get('edits', {}), dict) or not isinstance(manual, dict):
         raise ValueError('清洗结果格式无效')
@@ -259,8 +260,12 @@ def export_result(folder):
             render_markdown({**data, 'segments': review}, names, edits))
     if edits:
         rendered['transcript.clean.md'] = render_markdown(view, names, edits)
-        if (folder / 'transcript.agy.json').exists():
-            rendered['transcript.clean.md'] = '> AGY 清洗草稿，待核对。原始转录保留；依据与疑点见 cleanup-notes.md。\n\n' + rendered['transcript.clean.md']
+    proofread = read_json(folder / PROOFREAD)
+    if proofread is not None:
+        if edits:
+            rendered['transcript.clean.md'] = '> AGY 基础校对稿，待核对。原始转录保留；改动与疑点见 proofread-notes.md。\n\n' + rendered['transcript.clean.md']
+        rendered['proofread-notes.md'] = ('# 校对说明\n\nAGY 按 subtitle-cleaning 提出、经程序核对原文后采用；人工校正优先。\n\n'
+                                          + ('\n'.join(proofread.get('notes', [])) or '没有需要修改的识别错误。') + '\n')
     summary = read_json(folder / SUMMARY)
     if summary is not None:
         validate_summary(summary, data['segments'])
@@ -271,7 +276,7 @@ def export_result(folder):
         rendered['summary-notes.md'] = f'# 总结核对说明\n\n{origin}\n\n' + speaker(summary['notes']) + '\n'
     for name, content in rendered.items():
         atomic_text(folder / 'exports' / name, content)
-    stale = [] if edits else ['transcript.clean.md']
+    stale = ([] if edits else ['transcript.clean.md']) + ([] if proofread is not None else ['proofread-notes.md'])
     if not desk:
         stale += ['transcript.full.md', 'transcript.full.srt', 'transcript.review.md']
     for name in stale:

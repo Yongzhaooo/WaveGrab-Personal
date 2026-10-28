@@ -29,6 +29,7 @@ class TranscriptPanel(ttk.Frame):
         self.busy = False
         self.process = None
         self.cancelled = threading.Event()
+        self.pending = []
         self.path_var = tk.StringVar(value='选择一次录音，或录完后直接到这里处理')
         self.audio_var, self.status = tk.StringVar(), tk.StringVar(value='音频在本机处理')
         self.count = tk.IntVar(value=0)
@@ -136,6 +137,17 @@ class TranscriptPanel(ttk.Frame):
         for button in (self.rename_btn, self.edit_btn, self.refresh_btn, self.export_btn):
             button.configure(state='normal' if self.data and not self.busy else 'disabled')
         self.handoff_btn.configure(state='normal' if self.folder and not self.busy else 'disabled')
+
+    def transcribe_later(self, folder):
+        """Saved recordings transcribe one at a time without a click; finished ones only open."""
+        self.pending.append(Path(folder))
+        self._next()
+
+    def _next(self):
+        while self.pending and not self.busy:
+            self.set_folder(self.pending.pop(0))
+            if not (self.folder / RAW).exists():
+                self.start()
 
     def choose_folder(self):
         folder = filedialog.askdirectory(title='选择包含录音的文件夹')
@@ -357,9 +369,12 @@ class TranscriptPanel(ttk.Frame):
             self.reload()
             self.set_settings_visible(False)
         self._controls()
+        if not self.cancelled.is_set():
+            self._next()
 
     def cancel(self):
         self.cancelled.set()
+        self.pending.clear()
         if self.process and self.process.poll() is None:
             self.process.terminate()
         self.status.set('正在取消…')

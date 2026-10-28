@@ -8,6 +8,7 @@ import os
 import queue
 import json
 from handoff import clipboard_prompt
+from cleanup import start_cleanup, unfinished
 
 import numpy as np
 
@@ -703,10 +704,21 @@ class AudioRecorderApp:
                 self.status_var.set(f'录音已保存，回看页已就绪：{path.name}')
         self._post(update)
 
+    def _resume_processing(self):
+        """Continue work that stopped when the app last closed; a transcription restarts from its audio."""
+        try:
+            transcribe, resume = unfinished(self.output_folder_var.get())
+        except OSError as exc:
+            self.status_var.set(f'未能检查未完成的录音：{exc}')
+            return
+        for folder in resume:
+            start_cleanup(folder)
+        for folder in transcribe:
+            self.result_panel.transcribe_later(folder)
+
     def _show_completion(self, path: Path) -> None:
         """Show completion message."""
-        if not self.result_panel.busy:
-            self.result_panel.set_folder(path)
+        self.result_panel.transcribe_later(path)
         self.config.last_session = str(path)
         self._save_config()
         if self.tabs.select() == str(self.recordings_panel):
@@ -716,7 +728,7 @@ class AudioRecorderApp:
         else:
             self.status_var.set(f"已保存：{path.name}")
         if self.desktop and not self._last_error:
-            self.desktop.set_detail('录音已保存 · 回看页在后台准备')
+            self.desktop.set_detail('录音已保存 · 后台转录与校对')
 
     def _save_config(self) -> None:
         """Save current configuration."""
@@ -935,4 +947,5 @@ class AudioRecorderApp:
                 self._show_window()
         else:
             self.root.deiconify()
+        self._resume_processing()
         self.root.mainloop()

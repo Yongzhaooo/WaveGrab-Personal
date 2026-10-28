@@ -26,10 +26,16 @@ class CleanupTests(unittest.TestCase):
         transcript_skill = self.folder / 'transcript-processing.md'
         transcript_skill.write_text('TRANSCRIPT_FIXTURE: preserve discussion logic.', encoding='utf-8')
         self.config['transcript_processing_skill'] = str(transcript_skill)
+        subtitle_skill = self.folder / 'subtitle-cleaning.md'
+        subtitle_skill.write_text('SUBTITLE_FIXTURE: minimal ASR fixes.', encoding='utf-8')
+        self.config['subtitle_cleaning_skill'] = str(subtitle_skill)
 
     def response(self, config, prompt, schema, work, evidence):
         if 'queries' in schema['properties']:
             return {'queries': ['BLQ']}
+        if 'unresolved' in schema['properties']:
+            self.assertIn('SUBTITLE_FIXTURE', prompt)
+            return {'edits': [], 'unresolved': []}
         segments = json.loads(prompt.split('SOURCE:\n', 1)[1].split('\nKNOWLEDGE:', 1)[0])
         self.assertIn('HUMANIZER_FIXTURE', prompt)
         self.assertIn('TRANSCRIPT_FIXTURE', prompt)
@@ -55,8 +61,42 @@ class CleanupTests(unittest.TestCase):
         text = (self.folder / 'exports/summary.md').read_text(encoding='utf-8')
         self.assertIn('同事甲', text)
         self.assertNotIn('00:00:', text)
-        self.assertFalse((self.folder / 'transcript.agy.json').exists())
+        self.assertEqual(read_json(self.folder / 'transcript.agy.json')['edits'], {})
         self.assertEqual(cleanup.cleanup_status(self.folder)['state'], 'complete')
+
+    def test_proofread_applies_only_verified_corrections_and_feeds_summary(self):
+        edit_segment(self.folder, 'seg_00002', '人工核对的同事发言')
+        summary_sources = []
+        def call(config, prompt, schema, work, evidence):
+            if 'unresolved' in schema['properties']:
+                source = json.loads(prompt.split('SOURCE:\n', 1)[1].split('\nKNOWLEDGE:', 1)[0])
+                self.assertEqual(source[1]['text'], '人工核对的同事发言')
+                return {'edits': [
+                    dict(id='seg_00001', original='Main person one', replacement='Main person won', reason='context',
+                         confidence='high', kind='asr', canonical_term=''),
+                    dict(id='seg_00002', original='人工核对的同事发言', replacement='AI 改写人工文字', reason='x',
+                         confidence='high', kind='asr', canonical_term=''),
+                    dict(id='seg_00004', original='not the row', replacement='invented', reason='x',
+                         confidence='high', kind='asr', canonical_term=''),
+                    dict(id='seg_00005', original='Overlapping speech', replacement='Overlap speech', reason='guess',
+                         confidence='low', kind='asr', canonical_term='')],
+                    'unresolved': ['seg_00003 术语不确定']}
+            if 'markdown' in schema['properties']:
+                summary_sources.append(json.loads(prompt.split('SOURCE:\n', 1)[1].split('\nKNOWLEDGE:', 1)[0]))
+            return self.response(config, prompt, schema, work, evidence)
+        cleanup.clean(self.folder, self.config, call=call, search=lambda *_: [])
+        edits = load_edits(self.folder, load_result(self.folder))
+        self.assertEqual(edits['seg_00001'], 'Main person won')
+        self.assertEqual(edits['seg_00002'], '人工核对的同事发言')
+        self.assertNotIn('seg_00004', edits)
+        self.assertNotIn('seg_00005', edits)
+        texts = {s['id']: s['text'] for s in summary_sources[0]}
+        self.assertEqual((texts['seg_00001'], texts['seg_00002']), ('Main person won', '人工核对的同事发言'))
+        notes = (self.folder / 'exports/proofread-notes.md').read_text(encoding='utf-8')
+        self.assertIn('低把握未采用', notes)
+        self.assertIn('术语不确定', notes)
+        self.assertIn('Main person won', (self.folder / 'exports/transcript.clean.md').read_text(encoding='utf-8'))
+        self.assertEqual(load_result(self.folder), SAMPLE)
 
     def test_invalid_summary_rejected_without_replacing_previous_draft(self):
         cleanup.clean(self.folder, self.config, call=self.response, search=lambda *_: [])
@@ -119,6 +159,28 @@ class CleanupTests(unittest.TestCase):
             cleanup.clean(self.folder, self.config, call=respond, search=lambda *_: [])
         self.assertEqual(calls[-1], 'merged-summary')
         self.assertIn('两个话题合并后的结论', (self.folder / 'exports/summary.md').read_text(encoding='utf-8'))
+
+    def test_startup_finds_unfinished_saved_recordings_oldest_first(self):
+        root = self.folder / 'library'
+        def recording(name, status, audio=True, transcribed=False, cleanup_state=None):
+            folder = root / name
+            if transcribed:
+                install_result(folder, copy.deepcopy(SAMPLE))
+            folder.mkdir(parents=True, exist_ok=True)
+            (folder / 'session.json').write_text(json.dumps({'status': status}), encoding='utf-8')
+            if audio:
+                (folder / 'mixed.flac').write_bytes(b'audio')
+            if cleanup_state:
+                cleanup.set_status(folder, cleanup_state, '')
+            return folder
+        newer = recording('2026-10-27_084041_000000_recording', 'complete')
+        older = recording('2026-10-23_153923_000000_recording', 'incomplete')
+        recording('2026-10-24_100000_000000_recording', 'complete', audio=False)
+        recording('2026-10-25_100000_000000_recording', 'recording')
+        interrupted = recording('2026-10-26_100000_000000_recording', 'complete', transcribed=True, cleanup_state='running')
+        recording('2026-10-26_110000_000000_recording', 'complete', transcribed=True, cleanup_state='failed')
+        recording('2026-10-26_120000_000000_recording', 'complete', transcribed=True, cleanup_state='complete')
+        self.assertEqual(cleanup.unfinished(root), ([older, newer], [interrupted]))
 
     def test_streamed_cli_requires_success_and_uses_stdin(self):
         good = {'status': 'SUCCESS', 'structured_output': {'queries': []}}

@@ -48,9 +48,9 @@ class RecordingsPanel(ttk.Frame):
         self.audio_btn.pack(side='left')
         self.clean_btn = ttk.Button(files, text='总结位置', command=self.open_clean, state='disabled')
         self.clean_btn.pack(side='left', padx=8)
-        self.cleanup_btn = ttk.Button(files, text='生成总结 / 重试', command=self.clean_selected, state='disabled')
+        self.cleanup_btn = ttk.Button(files, text='校对与总结 / 重试', command=self.clean_selected, state='disabled')
         self.cleanup_btn.pack(side='left')
-        self.cleanup_text = tk.StringVar(value='转录完成后自动总结')
+        self.cleanup_text = tk.StringVar(value='转录完成后自动校对与总结')
         ttk.Label(files, textvariable=self.cleanup_text, style='Muted.TLabel').pack(side='left', padx=12)
         editor = ttk.Frame(footer)
         editor.pack(fill='x')
@@ -90,7 +90,7 @@ class RecordingsPanel(ttk.Frame):
         row = self.rows.get(str(folder), {})
         can_clean = folder and (folder / RAW).exists() and row.get('state') != 'recording' and not row.get('audio_warning')
         self.cleanup_btn.configure(state='normal' if can_clean and state.get('state') != 'running' else 'disabled')
-        self.cleanup_text.set(LABELS.get(state.get('state'), '转录完成后自动总结'))
+        self.cleanup_text.set(LABELS.get(state.get('state'), '转录完成后自动校对与总结'))
 
     def audio_path(self):
         if self.folder:

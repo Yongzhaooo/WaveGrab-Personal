@@ -25,7 +25,7 @@ Windows 桌面程序保留现有 WASAPI 录音链路。浅色界面分为“录�
 
 音频边录边写 FLAC；停止只负责停止音频、关闭文件、写会话状态并回到就绪。截图初始化、截图组件退出及回看页生成由独立后台任务负责，录音开始／停止不等待它们。原生截图退出仍设 3 秒上限，但等待属于后台任务。每个任务绑定自己的会话目录及已冻结的时钟，旧任务不能写入新录音；回看页可从已保存时间轴重新生成，采用原子替换。
 
-转录维持独立低优先级进程，录音和转录界面不再全局互斥。只拒绝转录仍在写入的同一个会话；允许录制新会议时转录已保存的旧会议。录音完成不会切走正在处理的结果页，退出时先保存音频，取消转录不作为录音停止的前置条件。
+转录维持独立低优先级进程，录音和转录界面不再全局互斥。只拒绝转录仍在写入的同一个会话；允许录制新会议时转录已保存的旧会议。录音保存后由 `TranscriptPanel.transcribe_later` 排队，一次只运行一个转录进程，已有原始转录的会话只打开不重做；取消或退出清空队列，不作为录音停止的前置条件。程序启动（`AudioRecorderApp.run`）时由 `cleanup.unfinished` 扫描录音根目录：已保存（`complete`/`incomplete`）、有音频但没有原始转录的会话按时间从早到晚入队；转录中断不保留半成品，下次从音频重跑。已转录但整理状态为中断（`running` 且锁已释放）的会话重新启动整理；失败状态留给手动重试，避免配置错误时每次启动都重复调用 AGY。
 
 无外放的远端录制使用用户单独安装的 VB-CABLE：Teams 输出到 `CABLE Input`，录音器通过普通 WASAPI 输入读取 `CABLE Output`，同时读取实际麦克风。系统来源枚举优先提供该接收端，并隐藏同一驱动的重复回环端点；本机安装后回环端点曾报 Invalid device，直接输入已通过实际会议试录。录音器不创建播放或监听流，Teams 麦克风静音与物理输出静音由用户保持，程序不自动改变系统路由。
 
@@ -52,9 +52,9 @@ Windows 桌面程序保留现有 WASAPI 录音链路。浅色界面分为“录�
 
 `agent_cli.py` 提供无 GUI 的本地 JSON 接口，`WaveGrab-Agent.cmd` 使用便携目录现有 Python 运行环境启动。录音根目录取现有配置，录音 ID 限定为根目录下的一场会话。查询复用转录存储模块；AGY 整理复用 `cleanup.clean`；外部 agent 的总结经既有校验和会话锁写入，再通过原导出链路生成界面可见结果。没有新的常驻服务或数据存储。公共命令契约见 [agent-api.md](agent-api.md)。
 
-文字清洗由独立 `cleanup.py` 进程负责，GUI 在成功安装转录后启动，录音记录页也可重试。每场用 OS 文件锁避免重复任务，锁随进程释放；状态文件和日志供界面读取。用户选择复用本机 AGY CLI 登录，无头模式通过 stdin 传入材料，默认权限、不自动批准工具，不改 AGY 登录或全局设置。
+文字校对与总结由独立 `cleanup.py` 进程负责，GUI 在成功安装转录后启动，录音记录页也可重试。每场用 OS 文件锁避免重复任务，锁随进程释放；状态文件和日志供界面读取。用户选择复用本机 AGY CLI 登录，无头模式通过 stdin 传入材料，默认权限、不自动批准工具，不改 AGY 登录或全局设置。
 
-总结逐批生成最多三个术语查询，再由本地知识库脚本以 `current-work / exact_fts / company_sensitive_allowed` 检索，完整保留来源、权威等级及警告。AGY 每次收到已配置 transcript-processing 与 humanizer 的完整技能指令；transcript-processing 主导 notes 模式，保留讨论逻辑、澄清、理由和明确行动，humanizer 只润色行文。短录音直接生成总结；长会议分批整理后，再合并为一篇。结果保存在 `meeting.summary.json`，正文和核对说明分别导出到 `exports/summary.md`、`exports/summary-notes.md`。人工校正优先作为输入，原始转录及已有逐段校对保持不变。总结中的说话人采用稳定 ID 占位符，导出时应用当前显示名。结构校验拒绝空正文、无效来源片段及无效说话人；事实与信息覆盖仍须核对。
+每批先生成最多三个术语查询，再由本地知识库脚本以 `current-work / exact_fts / company_sensitive_allowed` 检索，完整保留来源、权威等级及警告；同一检索结果供该批校对与总结共用。校对输入是原始转录加人工校正（不含上次 AI 校对，重跑不叠加），AGY 按 subtitle-cleaning 返回逐段候选；`proofread_batch` 只采用 `original` 与原文逐字一致、非低把握的整段替换，其余记入说明。结果保存在 `transcript.agy.json`，导出 `exports/transcript.clean.md` 与 `exports/proofread-notes.md`；`load_edits` 让人工校正覆盖 AI 校对。随后总结读取校对后文字，AGY 收到 transcript-processing 与 humanizer 的完整技能指令；transcript-processing 主导 notes 模式，humanizer 只润色行文。短录音直接生成总结；长会议分批整理后，再合并为一篇。结果保存在 `meeting.summary.json`，正文和核对说明分别导出到 `exports/summary.md`、`exports/summary-notes.md`。原始转录保持不变。总结中的说话人采用稳定 ID 占位符，导出时应用当前显示名。结构校验拒绝空正文、无效来源片段及无效说话人；事实与信息覆盖仍须核对。
 
 本机路径和已登录的 CLI 模型在便携程序旁 `cleanup-config.json` 配置，独立于录音配置；不纳入 Git。打包附带清洗脚本和共享转录存储模块。无原数据迁移；禁用清洗不影响本地录音和转录。
 

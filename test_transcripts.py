@@ -68,6 +68,27 @@ class TranscriptTests(unittest.TestCase):
         cleanup.assert_called_once_with(folder)
         self.assertIsNone(panel.process)
 
+    def test_saved_recordings_queue_transcription_without_redoing_finished_ones(self):
+        from gui.transcripts import TranscriptPanel
+        import threading
+        done, first, second = self.folder, Path(self.temp.name) / 'first', Path(self.temp.name) / 'second'
+        panel = Mock(pending=[], busy=False, cancelled=threading.Event())
+        panel._next = lambda: TranscriptPanel._next(panel)
+        panel.set_folder.side_effect = lambda folder: setattr(panel, 'folder', folder)
+        started = []
+        def start():
+            started.append(panel.folder)
+            panel.busy = True
+        panel.start.side_effect = start
+        for folder in (done, first, second):
+            TranscriptPanel.transcribe_later(panel, folder)
+        self.assertEqual((started, panel.pending), ([first], [second]))
+        panel.busy = False
+        panel._next()
+        self.assertEqual(started, [first, second])
+        TranscriptPanel.cancel(panel)
+        self.assertEqual(panel.pending, [])
+
     def test_imported_cleaning_updates_named_exports(self):
         (self.folder / 'transcript.edits.json').write_text(json.dumps({'seg_00002': '清洗后的中文'}), encoding='utf-8')
         rename_speaker(self.folder, 'speaker_2', '远端乙')
