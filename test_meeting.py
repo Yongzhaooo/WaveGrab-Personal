@@ -49,7 +49,7 @@ class MeetingTests(unittest.TestCase):
         with patch('gui.app.get_devices', return_value=[]), patch('gui.app.load_config', return_value=AppConfig()):
             self.app = AudioRecorderApp()
         self.app.root.withdraw()
-        self.app.indicator = Mock()
+        self.app.desktop = Mock()
         self.addCleanup(self.app.root.destroy)
 
     def test_no_teams_starts_room_recording_even_with_screenshots_enabled(self):
@@ -60,7 +60,7 @@ class MeetingTests(unittest.TestCase):
         start.assert_called_once()
         self.assertTrue(app.controller.room_mode)
         self.assertIsNone(app.controller.screen_target)
-        app.indicator.update.assert_called_with('准备中')
+        app.desktop.update.assert_called_with('准备中')
 
     def test_verified_virtual_call_binds_only_the_meeting_handle(self):
         app = self.app
@@ -93,29 +93,11 @@ class MeetingTests(unittest.TestCase):
     def test_marker_feedback_requires_a_saved_marker(self):
         with patch.object(self.app.controller, 'add_marker', return_value={'label': '标记 1', 'seconds': 12}):
             self.app._add_marker()
-            self.app.indicator.flash.assert_called_with('marker')
+            self.app.desktop.set_detail.assert_called_with('标记 1 · 00:12')
         with patch.object(self.app.controller, 'add_marker', return_value=None):
             self.app._add_marker()
-            self.app.indicator.flash.assert_called_with('error')
+            self.app.desktop.set_detail.assert_called_with('录音开始后可打标')
             self.assertIn('开始后', self.app.status_var.get())
-
-    def test_native_indicator_preserves_focus_and_allows_clicks_through(self):
-        import ctypes
-        from desktop import RecordingIndicator
-        indicator = RecordingIndicator(self.app.root)
-        try:
-            user = ctypes.windll.user32
-            user.GetForegroundWindow.restype = ctypes.c_void_p
-            foreground = user.GetForegroundWindow()
-            indicator.update('录音中')
-            indicator.flash('marker')
-            self.app.root.update()
-            self.assertEqual(user.GetForegroundWindow(), foreground)
-            style = user.GetWindowLongPtrW(indicator.hwnd, -20)
-            self.assertEqual(style & 0x080000A0, 0x080000A0)
-        finally:
-            indicator.close()
-
     def test_changed_window_identity_suspends_capture(self):
         from visuals import window_status
         api = Mock()

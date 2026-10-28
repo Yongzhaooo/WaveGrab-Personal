@@ -84,3 +84,5 @@ coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False,
                name='WaveGrab-Personal')
 shutil.copy2(os.path.join(BASE_PATH, 'WaveGrab-Agent.cmd'),
              os.path.join(DISTPATH, 'WaveGrab-Personal', 'WaveGrab-Agent.cmd'))
+shutil.copy2(os.path.join(BASE_PATH, 'Start-WaveGrab.cmd'),
+             os.path.join(DISTPATH, 'WaveGrab-Personal', 'Start-WaveGrab.cmd'))

@@ -11,7 +11,7 @@ def main() -> int:
     try:
         from gui import AudioRecorderApp
         app = AudioRecorderApp()
-        app.run()
+        app.run(show_window='--show' in sys.argv)
         return 0
     except Exception as e:
         import traceback

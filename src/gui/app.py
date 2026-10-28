@@ -35,7 +35,6 @@ class AudioRecorderApp:
         self._closing = False
         self._last_error = ''
         self.desktop = None
-        self.indicator = None
         self._start_pending = None
         self._start_serial = 0
         self._scene_busy = False
@@ -502,8 +501,8 @@ class AudioRecorderApp:
             self._start_pending = token
             self.rec_btn.configure(state='disabled')
             self.status_var.set('准备录音 · 正在识别会议')
-            if self.indicator:
-                self.indicator.update('准备中')
+            if self.desktop:
+                self.desktop.update('准备中')
             self._scan_scene(lambda scene: self._finish_auto_start(token, scene))
             self.root.after(2500, lambda: self._finish_auto_start(token,
                 MeetingScene(detail='会议识别超时 · 已使用会议室模式')))
@@ -549,9 +548,8 @@ class AudioRecorderApp:
                 self.desktop.set_detail('Alt+M 打标，Alt+R 停止')
         else:
             self.rec_btn.configure(state='normal')
-            if self.indicator:
-                self.indicator.update('就绪')
-                self.indicator.flash('error')
+            if self.desktop:
+                self.desktop.update('就绪')
 
     def _on_pause(self) -> None:
         """Pause or resume recording."""
@@ -593,10 +591,6 @@ class AudioRecorderApp:
         self.mark_btn.configure(state='normal' if state in (RecordingState.RECORDING, RecordingState.PAUSED) else 'disabled')
         if self.desktop:
             self.desktop.update({RecordingState.IDLE: '就绪', RecordingState.RECORDING: '录音中',
-                RecordingState.PAUSED: '已暂停', RecordingState.MONITORING: '检查输入',
-                RecordingState.SAVING: '保存中'}[state])
-        if self.indicator:
-            self.indicator.update({RecordingState.IDLE: '就绪', RecordingState.RECORDING: '录音中',
                 RecordingState.PAUSED: '已暂停', RecordingState.MONITORING: '检查输入',
                 RecordingState.SAVING: '保存中'}[state])
         self.room_mode_check.configure(state='normal' if idle and not self.auto_mode_var.get() and not self.system_only_var.get() else 'disabled')
@@ -693,8 +687,6 @@ class AudioRecorderApp:
         self.status_var.set(message)
         if self.desktop:
             self.desktop.set_detail(message, error=True)
-        if self.indicator:
-            self.indicator.flash('error')
 
     def _on_recording_saved(self, path: Path) -> None:
         """Audio is closed and available independently of optional processing."""
@@ -850,8 +842,8 @@ class AudioRecorderApp:
             self._start_pending = None
             self.rec_btn.configure(state='normal')
             self.status_var.set('已取消开始录音')
-            if self.indicator:
-                self.indicator.update('就绪')
+            if self.desktop:
+                self.desktop.update('就绪')
         elif self.controller.is_recording:
             self._on_stop()
         elif self.controller.state == RecordingState.IDLE:
@@ -865,12 +857,10 @@ class AudioRecorderApp:
                 self.status_var.set(text)
                 if self.desktop:
                     self.desktop.set_detail(text)
-                if self.indicator:
-                    self.indicator.flash('marker')
             else:
                 self.status_var.set('录音开始后可打标')
-                if self.indicator:
-                    self.indicator.flash('error')
+                if self.desktop:
+                    self.desktop.set_detail('录音开始后可打标')
         except OSError as exc:
             self._report_error(f'标记未保存：{exc}')
 
@@ -924,9 +914,6 @@ class AudioRecorderApp:
             self.result_panel.cancel()
         self._closing = True
         self._start_pending = None
-        if self.indicator:
-            self.indicator.close()
-            self.indicator = None
         self._save_config()
         def close():
             self.controller.cleanup()
@@ -935,15 +922,17 @@ class AudioRecorderApp:
             self._post(self.root.destroy)
         threading.Thread(target=close, daemon=True).start()
 
-    def run(self) -> None:
+    def run(self, show_window: bool = False) -> None:
         """Start application."""
-        from desktop import DesktopControls, RecordingIndicator
-        self.root.withdraw()
-        self.indicator = RecordingIndicator(self.root)
+        from desktop import DesktopControls
+        if not show_window:
+            self.root.withdraw()
         self.desktop = DesktopControls(self._post, self._show_window, self._toggle_recording,
             self._add_marker, self._open_review, self._exit, self._report_error)
         if self.desktop.start():
             self.desktop.set_detail('右键设置 · Alt+R 开始/停止，Alt+M 打标')
+            if show_window:
+                self._show_window()
         else:
             self.root.deiconify()
         self.root.mainloop()

@@ -10,4 +10,6 @@ xcopy /E /I /Y "build\portable\WaveGrab-Personal\_internal" "dist\_internal" >nu
 if errorlevel 1 exit /b 1
 copy /Y "build\portable\WaveGrab-Personal\WaveGrab-Personal.exe" "dist\WaveGrab-Personal.exe" >nul
 if errorlevel 1 exit /b 1
+copy /Y "Start-WaveGrab.cmd" "dist\Start-WaveGrab.cmd" >nul
+if errorlevel 1 exit /b 1
 echo Built: dist\WaveGrab-Personal.exe
